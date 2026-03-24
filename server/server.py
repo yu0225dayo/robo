@@ -256,6 +256,15 @@ async def reconstruct_mesh(
     mesh_o3d.remove_degenerate_triangles()
     mesh_o3d.remove_unreferenced_vertices()
 
+    # SAM-3D はmm単位ではなく正規化座標で出力するため、mm単位にスケール変換
+    # SAM-6D の get_test_data は /1000 して mm→m を仮定している
+    bbox = mesh_o3d.get_axis_aligned_bounding_box()
+    max_extent = max(bbox.get_extent())
+    if max_extent > 0:
+        scale = 200.0 / max_extent  # 最長辺を200mmに正規化
+        mesh_o3d.scale(scale, center=bbox.get_center())
+    print(f"[Server] メッシュスケール変換: {max_extent:.4f} → 200mm")
+
     mesh_path = ply_path.replace(".ply", "_mesh.ply")
     o3d.io.write_triangle_mesh(mesh_path, mesh_o3d)
     print(f"[Server] メッシュ保存: {mesh_path} ({len(mesh_o3d.triangles)} triangles)")
