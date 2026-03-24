@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# モデルファイル（サイズが大きいためGit管理外）
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# Docker
+.docker/
+
+# 一時ファイル
+tmp/
+*.tmp
+*.log
+
+# OS
+.DS_Store
