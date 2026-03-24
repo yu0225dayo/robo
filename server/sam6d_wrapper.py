@@ -14,6 +14,7 @@ JiehongLin/SAM-6D の2ステージパイプラインをラップする。
 import os
 import sys
 import json
+import subprocess
 import tempfile
 import shutil
 import numpy as np
@@ -143,23 +144,23 @@ class SAM6DWrapper:
             output_dir = base + "_templates"
 
         os.makedirs(output_dir, exist_ok=True)
-        pem_dir = os.path.join(self.sam6d_repo, "SAM-6D", "Pose_Estimation_Model")
+        render_script = os.path.join(
+            self.sam6d_repo, "SAM-6D", "Render", "render_custom_templates.py"
+        )
+        blenderproc = "/opt/conda/envs/sam6d/bin/blenderproc"
 
-        orig_dir = os.getcwd()
-        try:
-            os.chdir(pem_dir)
-            if pem_dir not in sys.path:
-                sys.path.insert(0, pem_dir)
-            from utils.render_utils import render_templates as _render
-            _render(
-                cad_path=cad_path_mm,
-                output_dir=output_dir,
-                num_templates=num_templates,
+        cmd = [
+            blenderproc, "run", render_script,
+            "--cad_path", cad_path_mm,
+            "--output_dir", output_dir,
+        ]
+        print(f"[SAM-6D] テンプレートレンダリング開始: {cad_path_mm}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"テンプレートレンダリング失敗 (code={result.returncode}):\n{result.stderr[-2000:]}"
             )
-            print(f"[SAM-6D] テンプレートレンダリング完了: {output_dir} ({num_templates}視点)")
-        finally:
-            os.chdir(orig_dir)
-
+        print(f"[SAM-6D] テンプレートレンダリング完了: {output_dir}")
         return output_dir
 
     def estimate_pose(
