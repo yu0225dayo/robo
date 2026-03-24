@@ -148,6 +148,8 @@ class SAM6DWrapper:
         orig_dir = os.getcwd()
         try:
             os.chdir(pem_dir)
+            if pem_dir not in sys.path:
+                sys.path.insert(0, pem_dir)
             from utils.render_utils import render_templates as _render
             _render(
                 cad_path=cad_path_mm,
