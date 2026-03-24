@@ -22,3 +22,9 @@ tmp/
 
 # OS
 .DS_Store
+
+# データ・出力・モデルファイル（Git管理外）
+client/data/
+client/output/
+client/save_model/
+client/test_data/

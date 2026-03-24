@@ -1,0 +1,45 @@
+# real_world_demo 依存ライブラリ
+# Python 3.9 推奨
+
+# === Deep Learning ===
+torch>=2.0.0
+torchvision>=0.15.0
+
+# === 数値計算・データ処理 ===
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+
+# === 点群処理 ===
+open3d>=0.17.0
+plyfile>=0.9
+
+# === コンピュータビジョン ===
+opencv-python>=4.8.0
+
+# === 可視化 ===
+matplotlib>=3.7.0
+
+# === 設定ファイル ===
+pyyaml>=6.0
+
+# === 進捗表示 ===
+tqdm>=4.65.0
+
+# ===========================
+# オプション依存ライブラリ
+# (必要に応じてインストール)
+# ===========================
+
+# RealSense カメラ (カメラ使用時)
+# pip install pyrealsense2
+
+# SAM (Segment Anything Model)
+# pip install git+https://github.com/facebookresearch/segment-anything.git
+
+# ROS通信 (ROS使用時)
+# pip install rospkg  (ROS1)
+# pip install rclpy   (ROS2, colconでビルド)
+
+# シリアル通信 (シリアルロボット使用時)
+# pip install pyserial

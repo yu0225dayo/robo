@@ -1,0 +1,359 @@
+"""
+real_world_demo メインエントリーポイント
+
+パイプライン:
+    [オフライン] 物体ごとに1回:
+        RealSense RGB → サーバ (SAM-3D) → reference mesh (.ply) 保存
+        サーバが SAM-6D でテンプレートをレンダリングし保存
+
+    [オンライン] 毎回:
+        RealSense RGBD
+            → サーバ (SAM-6D) → 6DoF pose (R, t)
+            → reference mesh × (R, t, scale) → カメラ座標系の完全点群
+            → Shape2Gesture → 把持姿勢 (正規化座標系)
+            → (R, t, scale) でカメラ座標系へ変換
+            → 画像に投影して保存 / ロボットへ送信
+
+使用方法:
+    # Step1: reference mesh を生成 (物体ごとに1回)
+    python main.py --mode offline-mesh --mesh-out meshes/cup.ply
+
+    # Step2: 把持姿勢生成 (毎回)
+    python main.py --mesh meshes/cup.ply --no-robot
+    python main.py --mesh meshes/cup.ply
+"""
+
+import argparse
+import os
+import sys
+import yaml
+import numpy as np
+import matplotlib
+matplotlib.use("TkAgg")
+
+
+def load_config(config_path: str) -> dict:
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# ==============================================================
+# オフラインフェーズ: reference mesh の生成・保存
+# ==============================================================
+
+def run_offline_mesh(config: dict, args):
+    """
+    RealSense RGB → サーバ (SAM-3D + SAM-6D テンプレート) → mesh 保存
+
+    物体ごとに1回だけ実行する。
+    生成した mesh は --mesh-out で指定したパスに保存される。
+    """
+    from pipeline.camera import RealSenseCamera
+    from pipeline.sam6d_detector import SAM6DClient
+
+    cam_cfg = config["camera"]
+    sam_cfg = config["sam3d"]
+
+    camera = RealSenseCamera(
+        width=cam_cfg["width"],
+        height=cam_cfg["height"],
+        fps=cam_cfg["fps"],
+    )
+    camera.start()
+
+    client = SAM6DClient(
+        server_url=sam_cfg["server_url"],
+        timeout_mesh=sam_cfg.get("timeout", 120.0),
+    )
+
+    print("\n[操作方法]")
+    print("  [c] この画像で reference mesh を生成")
+    print("  [q] 終了")
+    print("=" * 50)
+
+    try:
+        while True:
+            rgb, depth, _ = camera.capture()
+            key = camera.show_preview(rgb, depth)
+
+            if key == ord("q"):
+                break
+            elif key == ord("c"):
+                mesh_path = args.mesh_out
+                print(f"\n[Step] reference mesh 生成中 → {mesh_path}")
+                if sam_cfg.get("interactive", True):
+                    client.save_reference_mesh_interactive(rgb, mesh_path)
+                else:
+                    client.save_reference_mesh(rgb, mesh_path)
+                print(f"[完了] {mesh_path} に保存しました。")
+                print("       次回: python main.py --mesh", mesh_path)
+                break
+    finally:
+        camera.stop()
+
+
+# ==============================================================
+# オンラインフェーズ: RGBD → 6DoF pose → 把持姿勢 → ロボット
+# ==============================================================
+
+def run_online(config: dict, args):
+    """
+    毎フレーム: RGBD → SAM-6D pose → Shape2Gesture → ロボット
+    """
+    from pipeline.camera import RealSenseCamera
+    from pipeline.sam6d_detector import SAM6DClient
+    from pipeline.grasp_generator import GraspGenerator
+    from pipeline.robot_interface import RobotInterface, GraspPose
+    from utils.visualization import (
+        live_visualize_setup, live_visualize_update,
+        visualize_multiple_grasps, project_hands_on_image,
+    )
+    from utils.coord_transform import (
+        CameraIntrinsics, ObjectPose,
+        estimate_scale_from_depth, project_to_image,
+    )
+    from utils.pointcloud_utils import load_pointcloud_ply
+
+    cam_cfg   = config["camera"]
+    sam_cfg   = config["sam3d"]
+    sam6d_cfg = config.get("sam6d", {})
+    model_cfg = config["grasp_model"]
+    robot_cfg = config["robot"]
+    vis_cfg   = config["visualization"]
+
+    # ---- 初期化 ----
+    print("=" * 50)
+    print("[Step 1] 初期化中...")
+    print("=" * 50)
+
+    # Shape2Gesture モデルのロード
+    generator = GraspGenerator(
+        model_dir=model_cfg["model_dir"],
+        epoch=model_cfg["epoch"],
+    )
+    generator.load_models()
+
+    # SAM-6D クライアント
+    client = SAM6DClient(
+        server_url=sam_cfg["server_url"],
+        timeout_mesh=sam_cfg.get("timeout", 120.0),
+        timeout_pose=sam6d_cfg.get("timeout", 30.0),
+    )
+    # reference mesh のパスをセット (サーバ側パスは別途指定 or 初回 offline-mesh で取得)
+    server_mesh_path = args.server_mesh_path or ""
+    template_dir     = args.template_dir or ""
+    client.load_reference_mesh(args.mesh, server_mesh_path, template_dir)
+
+    # reference mesh の正規化点群を読み込み (GraspGenerator 入力 + スケール推定)
+    mesh_pts = load_pointcloud_ply(args.mesh, target_points=2048)
+
+    # ロボット
+    mode = robot_cfg["mode"]
+    robot_kwargs = robot_cfg.get(mode, {})
+    robot = RobotInterface(mode=mode, **robot_kwargs)
+    if not args.no_robot:
+        robot.connect()
+
+    # カメラ
+    camera = RealSenseCamera(
+        width=cam_cfg["width"],
+        height=cam_cfg["height"],
+        fps=cam_cfg["fps"],
+    )
+    camera.start()
+
+    intrinsics = CameraIntrinsics(
+        fx=camera.fx, fy=camera.fy,
+        cx=camera.cx, cy=camera.cy,
+        width=cam_cfg["width"], height=cam_cfg["height"],
+    )
+
+    fig, ax = live_visualize_setup()
+
+    print("\n[操作方法]")
+    print("  [g] 把持姿勢を生成してロボットに送信")
+    print("  [q] 終了")
+    print("=" * 50)
+
+    try:
+        while True:
+            rgb, depth, _ = camera.capture()
+            key = camera.show_preview(rgb, depth)
+
+            if key == ord("q"):
+                break
+
+            elif key == ord("g"):
+                # ---- Step 2: SAM-6D で 6DoF pose 推定 ----
+                print("\n" + "=" * 50)
+                print("[Step 2] SAM-6D で 6DoF pose 推定中...")
+                print("=" * 50)
+
+                R, t = client.estimate_pose(rgb, depth, intrinsics)
+
+                # マスク重心から mask_u, mask_v を取得 (スケール推定用)
+                # t の x,y から逆投影でピクセル座標を計算
+                mask_u = int(intrinsics.fx * t[0] / t[2] + intrinsics.cx)
+                mask_v = int(intrinsics.fy * t[1] / t[2] + intrinsics.cy)
+
+                scale = estimate_scale_from_depth(
+                    depth, mask_u, mask_v, intrinsics, mesh_pts
+                )
+
+                # 6DoF pose オブジェクト (R, t, scale)
+                pose = ObjectPose(center_3d=t, scale=scale, R=R)
+
+                # ---- Step 3: Shape2Gesture で把持姿勢生成 ----
+                print("\n" + "=" * 50)
+                print("[Step 3] Shape2Gesture で把持姿勢を生成中...")
+                print("=" * 50)
+
+                # GraspGenerator は正規化点群を期待する
+                grasp_results = generator.generate(
+                    mesh_pts,
+                    num_samples=model_cfg["num_samples"],
+                )
+
+                norm_pts, seg_labels = generator.get_segmentation(mesh_pts)
+
+                if vis_cfg["show_all_samples"] and len(grasp_results) > 1:
+                    visualize_multiple_grasps(
+                        norm_pts, grasp_results,
+                        labels=seg_labels if vis_cfg["show_segmentation"] else None,
+                    )
+
+                left_hand_norm, right_hand_norm = grasp_results[0]
+                live_visualize_update(
+                    fig, ax, norm_pts, left_hand_norm, right_hand_norm,
+                    labels=seg_labels if vis_cfg["show_segmentation"] else None,
+                )
+
+                # ---- Step 4: カメラ画像に投影して保存 ----
+                import cv2 as _cv2
+                from datetime import datetime
+                out_dir = os.path.join(
+                    "output", datetime.now().strftime("%Y%m%d_%H%M%S")
+                )
+                os.makedirs(out_dir, exist_ok=True)
+
+                for i, (lh_norm, rh_norm) in enumerate(grasp_results):
+                    result_img = project_hands_on_image(
+                        rgb, lh_norm, rh_norm,
+                        object_pose=pose,
+                        intrinsics=intrinsics,
+                    )
+                    save_path = os.path.join(out_dir, f"grasp_{i:02d}.png")
+                    _cv2.imwrite(save_path, result_img)
+
+                print(f"[投影結果] {len(grasp_results)}枚を {out_dir} に保存しました。")
+                _cv2.imshow("Grasp Projection",
+                            _cv2.imread(os.path.join(out_dir, "grasp_00.png")))
+                _cv2.waitKey(1)
+
+                # ---- Step 5: ロボットへ送信 ----
+                print("\n" + "=" * 50)
+                print("[Step 5] ロボットに把持姿勢を送信中...")
+                print("=" * 50)
+
+                # 正規化把持姿勢 → カメラ座標系 (ロボット送信用)
+                from utils.coord_transform import normalized_to_camera
+                left_hand_cam  = normalized_to_camera(left_hand_norm,  pose)
+                right_hand_cam = normalized_to_camera(right_hand_norm, pose)
+
+                if not args.no_robot:
+                    grasp_pose = GraspPose(
+                        left_hand=left_hand_cam,
+                        right_hand=right_hand_cam,
+                        object_scale=scale,
+                        object_center=t,
+                    )
+                    robot.send_grasp_pose(grasp_pose, execute=robot_cfg["execute"])
+                    result = robot.wait_for_result(timeout=robot_cfg["timeout"])
+                    print(f"[Robot] 結果: {result}")
+                else:
+                    print("[main] --no-robot: ロボット送信をスキップ")
+
+    except KeyboardInterrupt:
+        print("\n[main] 中断されました。")
+    finally:
+        camera.stop()
+        if not args.no_robot:
+            robot.disconnect()
+
+
+# ==============================================================
+# エントリーポイント
+# ==============================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="real_world_demo: RealSense + SAM-3D + SAM-6D + Shape2Gesture",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用例:
+  # Step1: reference mesh を生成 (物体ごとに1回)
+  python main.py --mode offline-mesh --mesh-out meshes/cup.ply
+
+  # Step2: 把持姿勢生成 (毎回)
+  python main.py --mesh meshes/cup.ply --no-robot
+  python main.py --mesh meshes/cup.ply
+        """
+    )
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument(
+        "--mode", choices=["online", "offline-mesh"], default="online",
+        help="online: 把持姿勢生成 / offline-mesh: reference mesh 生成",
+    )
+    parser.add_argument(
+        "--mesh", default=None,
+        help="[online] ローカルの reference mesh (.ply) パス",
+    )
+    parser.add_argument(
+        "--mesh-out", default="meshes/object.ply",
+        help="[offline-mesh] 保存先 .ply パス",
+    )
+    parser.add_argument(
+        "--server-mesh-path", default=None,
+        help="[online] サーバ側の mesh パス (offline-mesh 後に表示される)",
+    )
+    parser.add_argument(
+        "--template-dir", default=None,
+        help="[online] サーバ側のテンプレートディレクトリ (offline-mesh 後に表示される)",
+    )
+    parser.add_argument("--no-robot", action="store_true")
+    parser.add_argument("--num-samples", type=int, default=None)
+    parser.add_argument("--epoch",       type=int, default=None)
+    args = parser.parse_args()
+
+    if not os.path.exists(args.config):
+        print(f"エラー: 設定ファイルが見つかりません: {args.config}")
+        sys.exit(1)
+
+    config = load_config(args.config)
+    if args.num_samples is not None:
+        config["grasp_model"]["num_samples"] = args.num_samples
+    if args.epoch is not None:
+        config["grasp_model"]["epoch"] = args.epoch
+
+    print("=" * 50)
+    print("  real_world_demo")
+    print("  RealSense + SAM-3D + SAM-6D + Shape2Gesture")
+    print(f"  モード: {args.mode}")
+    print("=" * 50)
+
+    if args.mode == "offline-mesh":
+        run_offline_mesh(config, args)
+
+    else:  # online
+        if args.mesh is None:
+            print("エラー: --mesh で reference mesh (.ply) を指定してください。")
+            print("       先に: python main.py --mode offline-mesh --mesh-out meshes/cup.ply")
+            sys.exit(1)
+        if not os.path.exists(args.mesh):
+            print(f"エラー: mesh が見つかりません: {args.mesh}")
+            sys.exit(1)
+        run_online(config, args)
+
+
+if __name__ == "__main__":
+    main()

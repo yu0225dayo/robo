@@ -1,0 +1,82 @@
+# real_world_demo 設定ファイル
+# 要件定義に基づいたパイプライン全体の設定
+
+# ===========================
+# カメラ設定 (RealSense)
+# ===========================
+camera:
+  width: 640          # 解像度 (幅)
+  height: 480         # 解像度 (高さ)
+  fps: 30             # フレームレート
+  depth_min: 0.1      # 有効深度 最小値 [メートル]
+  depth_max: 2.0      # 有効深度 最大値 [メートル]
+
+# ===========================
+# SAM3D 設定
+# ===========================
+sam3d:
+  # A6000サーバ接続設定 (Linux サーバの IP を指定)
+  server_url: "http://10.40.1.126:8080"
+  target_points: 2048                           # 受け取る点群の点数
+  interactive: true                             # true: クリックで物体選択 / false: 画像中央を使用
+  timeout: 120.0                                # タイムアウト秒数 (3D生成は数十秒かかる)
+
+# ===========================
+# SAM-6D 設定
+# ===========================
+sam6d:
+  timeout: 30.0         # pose 推定タイムアウト秒数 (SAM-6D は比較的高速)
+
+# ===========================
+# Shape2Gesture モデル設定
+# ===========================
+grasp_model:
+  model_dir: "save_model"   # 学習済みモデルディレクトリ
+  epoch: 69                 # PositionVAE エポック番号
+  num_samples: 6            # 生成する把持候補数 (VAEサンプリング数)
+
+# ===========================
+# ロボット通信設定
+# ===========================
+robot:
+  mode: "mock"              # 通信モード: "ros" / "tcp" / "serial" / "mock"
+
+  # TCP/IP設定 (mode: "tcp" の場合)
+  tcp:
+    host: "192.168.1.100"
+    port: 5005
+
+  # ROS設定 (mode: "ros" の場合)
+  ros:
+    topic: "/grasp_pose"
+    result_topic: "/grasp_result"
+    ros_version: 1            # 1 = ROS1, 2 = ROS2
+
+  # シリアル通信設定 (mode: "serial" の場合)
+  serial:
+    port: "COM3"
+    baudrate: 115200
+
+  # モック設定 (mode: "mock" の場合, デバッグ用)
+  mock:
+    delay: 2.0                # 把持完了までのシミュレート遅延 [秒]
+
+  execute: true               # true: 実際に把持動作を実行 / false: 姿勢送信のみ
+  timeout: 30.0               # ロボット応答待ちタイムアウト [秒]
+
+# ===========================
+# 可視化設定
+# ===========================
+visualization:
+  show_segmentation: true     # セグメンテーション結果を色分け表示
+  show_all_samples: true      # 複数把持候補を並べて表示
+  save_results: false         # 結果画像を保存するか
+  save_dir: "results"         # 保存先ディレクトリ
+
+# ===========================
+# ログ設定
+# ===========================
+logging:
+  level: "INFO"               # ログレベル (DEBUG / INFO / WARNING / ERROR)
+  save_log: false
+  log_dir: "logs"
