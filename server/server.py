@@ -36,6 +36,18 @@ args_global = None
 # SAM-6D サービス URL (Docker コンテナ)
 _sam6d_url: str = "http://localhost:8081"
 
+# ホスト↔Dockerコンテナ間の共有tmpディレクトリパスマッピング
+_host_tmp: str   = "/home/okada/ws/project/tmp"
+_docker_tmp: str = "/workspace/tmp"
+
+
+def to_docker_path(host_path: str) -> str:
+    """ホスト側の絶対パスをDockerコンテナ内のパスに変換する"""
+    abs_path = os.path.abspath(host_path)
+    if abs_path.startswith(_host_tmp):
+        return _docker_tmp + abs_path[len(_host_tmp):]
+    return abs_path
+
 
 def load_models(sam_checkpoint: str, sam3d_config: str, sam3d_repo: str,
                 device: str = "cuda"):
@@ -181,7 +193,7 @@ async def reconstruct_mesh(
     click_y: int = Form(-1),
     seed: int = Form(42),
     target_points: int = Form(2048),
-    output_dir: str = Form("tmp/server_reconstructions"),
+    output_dir: str = Form(""),
 ):
     """
     クライアント互換エンドポイント: SAM-3D でメッシュ生成 + SAM-6D テンプレートレンダリング
@@ -220,8 +232,10 @@ async def reconstruct_mesh(
     print("[Server] SAM-3D 推論中...")
     output = sam3d_inference(rgb, best_mask, seed=seed)
 
-    os.makedirs(output_dir, exist_ok=True)
-    ply_path = os.path.join(output_dir, f"object_seed{seed}.ply")
+    # 共有tmpに保存してDockerからアクセスできるようにする
+    save_dir = output_dir if output_dir else os.path.join(_host_tmp, "server_reconstructions")
+    os.makedirs(save_dir, exist_ok=True)
+    ply_path = os.path.join(save_dir, f"object_seed{seed}.ply")
     output["gs"].save_ply(ply_path)
     print(f"[Server] PLY 保存: {ply_path}")
 
@@ -229,10 +243,10 @@ async def reconstruct_mesh(
     mask_center_u = int(xs.mean())
     mask_center_v = int(ys.mean())
 
-    # SAM-6D テンプレートレンダリング
+    # SAM-6D テンプレートレンダリング (Dockerコンテナ内パスで渡す)
     print("[Server] SAM-6D テンプレートレンダリング中...")
     tdir_resp = _sam6d_post("render_templates", {
-        "cad_path": ply_path,
+        "cad_path": to_docker_path(ply_path),
         "output_dir": None,
         "num_templates": 42,
     }, timeout=600.0)
@@ -609,9 +623,15 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--host-tmp", default="/home/okada/ws/project/tmp",
+                        help="ホスト側の共有tmpディレクトリ (Dockerマウント元)")
+    parser.add_argument("--docker-tmp", default="/workspace/tmp",
+                        help="Dockerコンテナ内の共有tmpディレクトリ (マウント先)")
     args = parser.parse_args()
     args_global = args
-    _sam6d_url = args.sam6d_service
+    _sam6d_url  = args.sam6d_service
+    _host_tmp   = args.host_tmp
+    _docker_tmp = args.docker_tmp
 
     print("=" * 50)
     print(f"  SAM 3D + SAM-6D Pipeline Server")
