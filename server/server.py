@@ -243,8 +243,19 @@ async def reconstruct_mesh(
     import open3d as o3d
     print("[Server] 点群をメッシュに変換中 (Poisson reconstruction)...")
     gs_ply = o3d.io.read_point_cloud(ply_path)
+
+    # ダウンサンプリングで点数を削減
+    gs_ply = gs_ply.voxel_down_sample(voxel_size=0.005)
+    print(f"[Server] ダウンサンプル後: {len(gs_ply.points)} points")
+
     gs_ply.estimate_normals()
-    mesh_o3d, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(gs_ply, depth=9)
+    mesh_o3d, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(gs_ply, depth=8)
+
+    # メッシュ簡略化 (三角形数を上限10000に)
+    mesh_o3d = mesh_o3d.simplify_quadric_decimation(10000)
+    mesh_o3d.remove_degenerate_triangles()
+    mesh_o3d.remove_unreferenced_vertices()
+
     mesh_path = ply_path.replace(".ply", "_mesh.ply")
     o3d.io.write_triangle_mesh(mesh_path, mesh_o3d)
     print(f"[Server] メッシュ保存: {mesh_path} ({len(mesh_o3d.triangles)} triangles)")
