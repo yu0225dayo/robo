@@ -1,0 +1,82 @@
+==============================
+ 起動手順 (計算機上)
+==============================
+
+【ステップ1】 SAM-6D Docker イメージのビルド (初回のみ)
+  cd ~/ws/project
+  docker compose build sam6d
+
+【ステップ2】 SAM-6D Docker サービスを起動
+  cd ~/ws/project
+  docker compose up -d sam6d
+
+  # ログ確認 (モデルロードに数分かかる)
+  docker compose logs -f sam6d
+
+  # ヘルスチェック
+  curl http://localhost:8081/health
+
+【ステップ3】 メインサーバ (SAM-3D) を起動
+  python ~/ws/project/server.py \
+    --sam-checkpoint ~/ws/project/sam_vit_h_4b8939.pth \
+    --sam3d-config   ~/ws/project/sam-3d-objects/checkpoints/hf/pipeline.yaml \
+    --sam3d-repo     ~/ws/project/sam-3d-objects \
+    --sam6d-service  http://localhost:8081 \
+    --host 0.0.0.0 --port 8080
+
+==============================
+ ローカルPC からの実行
+==============================
+
+【ファイル指定】
+  python client.py \
+    --server http://<計算機IP>:8080 \
+    --rgb   rgb.png \
+    --depth depth_mm.png \
+    --fx 615.0 --fy 615.0 --cx 320.0 --cy 240.0 \
+    --save result.png --show
+
+【RealSense カメラ】
+  python client.py \
+    --server http://<計算機IP>:8080 \
+    --realsense \
+    --save result.png --show
+
+==============================
+ API エンドポイント一覧
+==============================
+
+  GET  /health              → サーバ死活確認
+  GET  /sam6d/health        → SAM-6D Docker サービス死活確認
+  POST /reconstruct         → SAM-3D のみ (旧エンドポイント)
+  POST /render_templates    → SAM-6D テンプレートレンダリング
+  POST /estimate_pose       → SAM-6D 姿勢推定
+  POST /full_pipeline       → SAM-3D + SAM-6D フルパイプライン ★推奨
+  POST /segment_only        → SAM マスクのみ (デバッグ用)
+
+
+
+
+
+
+
+
+
+
+
+両方まとめて起動する場合
+ターミナル1 (SAM-6D を先に起動):
+
+
+cd ~/ws && docker compose up -d sam6d
+docker logs -f sam6d_service   # "models_loaded" が出るまで待つ
+ターミナル2 (SAM-3D を起動):
+
+
+conda activate sam3d-objects
+python ~/ws/project/server.py \
+  --sam-checkpoint ~/ws/project/sam_vit_h_4b8939.pth \
+  --sam3d-config   ~/ws/project/sam-3d-objects/checkpoints/hf/pipeline.yaml \
+  --sam3d-repo     ~/ws/project/sam-3d-objects \
+  --sam6d-service  http://localhost:8081 \
+  --host 0.0.0.0 --port 8080

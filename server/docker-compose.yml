@@ -1,0 +1,52 @@
+version: "3.8"
+
+# SAM-6D マイクロサービス
+# 使い方:
+#   docker compose build sam6d
+#   docker compose up -d sam6d
+#
+# ホスト側の ~/ws/project が /workspace にマウントされる
+# SAM-6D リポジトリ: /workspace/SAM-6D
+# 共有テンポラリ:     /workspace/tmp
+
+services:
+  sam6d:
+    build:
+      context: .
+      dockerfile: Dockerfile.sam6d
+    image: sam6d-service:latest   # lihualiu/sam-6d:1.0 をベースにビルドしたもの
+    container_name: sam6d_service
+    restart: unless-stopped
+    # GPU アクセス
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      # SAM-6D リポジトリ (チェックポイントのダウンロード書き込みを許可)
+      - /home/okada/ws/project/SAM-6D:/workspace/SAM-6D
+      # sam6d_wrapper.py を共有 (同じワークスペースから参照)
+      - /home/okada/ws/project/sam6d_wrapper.py:/workspace/sam6d_wrapper.py
+      # 共有テンポラリ (中間ファイルを両サービスで共有)
+      - /home/okada/ws/project/tmp:/workspace/tmp
+    ports:
+      - "127.0.0.1:8081:8081"   # ローカルのみ公開 (外部非公開)
+    command: >
+      /opt/conda/envs/sam6d/bin/python /service/sam6d_service.py
+        --sam6d-repo /workspace/SAM-6D
+        --device cuda
+        --segmentor sam
+        --host 0.0.0.0
+        --port 8081
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # モデルロードに時間がかかるため

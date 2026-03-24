@@ -1,0 +1,6 @@
+[submodule "server/SAM-6D"]
+	path = server/SAM-6D
+	url = https://github.com/JiehongLin/SAM-6D
+[submodule "server/sam-3d-objects"]
+	path = server/sam-3d-objects
+	url = https://github.com/facebookresearch/sam-3d-objects

@@ -1,0 +1,25 @@
+# SAM-6D 専用 Docker イメージ
+# ベース: lihualiu/sam-6d:1.0 (SAM-6D 公式イメージ)
+# FastAPI サービス層のみ追加
+
+FROM lihualiu/sam-6d:1.0
+
+ENV PYTHONUNBUFFERED=1
+
+# FastAPI サービスに必要なパッケージを sam6d conda 環境に追加インストール
+RUN /opt/conda/envs/sam6d/bin/pip install --no-cache-dir \
+    fastapi "uvicorn[standard]" httpx python-multipart
+
+WORKDIR /service
+
+# サービス本体をコピー
+COPY sam6d_service.py /service/sam6d_service.py
+
+# ボリュームマウント前提:
+#   /workspace/SAM-6D          → ホストの ~/ws/SAM-6D
+#   /workspace/sam6d_wrapper.py → ホストの ~/ws/sam6d_wrapper.py
+#   /workspace/tmp              → 共有テンポラリ
+
+EXPOSE 8081
+
+CMD ["/opt/conda/envs/sam6d/bin/python", "/service/sam6d_service.py", "--port", "8081"]
