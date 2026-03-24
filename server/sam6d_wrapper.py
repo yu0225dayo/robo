@@ -217,63 +217,70 @@ class SAM6DWrapper:
                 json.dump(cam_json, f)
 
             pem_dir = os.path.join(self.sam6d_repo, "SAM-6D", "Pose_Estimation_Model")
-            orig_dir = os.getcwd()
-            try:
-                os.chdir(pem_dir)
+            if pem_dir not in sys.path:
+                sys.path.insert(0, pem_dir)
 
-                # Stage 1: Instance Segmentation
-                from run_inference_custom import batch_input_data
-                detections = self._ism.generate_proposals(
-                    rgb_path=rgb_path,
-                    stability_score_thresh=0.97,
+            import torch
+            from run_inference_custom import get_templates, get_test_data
+
+            # Stage 1: Instance Segmentation → seg.json 保存
+            detections = self._ism.generate_proposals(
+                rgb_path=rgb_path,
+                stability_score_thresh=0.97,
+            )
+            if detections is None or len(detections) == 0:
+                raise RuntimeError("物体が検出されませんでした。")
+
+            seg_data = []
+            for det in detections:
+                seg_data.append({
+                    "segmentation": det["segmentation"],
+                    "score": float(det["stability_score"]),
+                    "bbox": det["bbox"],
+                })
+            with open(seg_path, "w") as f:
+                json.dump(seg_data, f)
+
+            # Stage 2: テンプレート特徴量取得
+            # render_custom_templates.py は output_dir/templates/ に保存する
+            tem_path = os.path.join(template_dir, "templates")
+            dataset_cfg = self._pem_cfg.test_dataset
+            all_tem, all_tem_pts, all_tem_choose = get_templates(tem_path, dataset_cfg)
+
+            with torch.no_grad():
+                all_tem_pts, all_tem_feat = self._pem.feature_extraction.get_obj_feats(
+                    all_tem, all_tem_pts, all_tem_choose
                 )
-                if detections is None or len(detections) == 0:
-                    raise RuntimeError("物体が検出されませんでした。")
 
-                # 検出結果を seg.json として保存
-                seg_data = []
-                for det in detections:
-                    seg_data.append({
-                        "segmentation": det["segmentation"],
-                        "score": float(det["stability_score"]),
-                        "bbox": det["bbox"],
-                    })
-                with open(seg_path, "w") as f:
-                    json.dump(seg_data, f)
+            # Stage 3: 観測データ取得 → Pose Estimation
+            input_data, _, _, _, dets = get_test_data(
+                rgb_path=rgb_path,
+                depth_path=depth_path,
+                cam_path=cam_path,
+                cad_path=cad_path_mm,
+                seg_path=seg_path,
+                det_score_thresh=det_score_thresh,
+                cfg=dataset_cfg,
+            )
 
-                # Stage 2: Pose Estimation
-                input_data, _, _ = batch_input_data(
-                    depth_path=depth_path,
-                    cam_path=cam_path,
-                    cad_path=cad_path_mm,
-                    seg_path=seg_path,
-                    det_score_thresh=det_score_thresh,
-                    cfg=self._pem_cfg,
-                )
+            ninstance = input_data['pts'].size(0)
+            with torch.no_grad():
+                input_data['dense_po'] = all_tem_pts.repeat(ninstance, 1, 1)
+                input_data['dense_fo'] = all_tem_feat.repeat(ninstance, 1, 1)
+                out = self._pem(input_data)
 
-                # テンプレート特徴量取得
-                from run_inference_custom import get_templates
-                templates = get_templates(template_dir, self._pem_cfg)
+            if 'pred_pose_score' in out:
+                pose_scores = (out['pred_pose_score'] * out['score']).detach().cpu().numpy()
+            else:
+                pose_scores = out['score'].detach().cpu().numpy()
 
-                import torch
-                with torch.no_grad():
-                    obj_feats = self._pem.feature_extraction.get_obj_feats(
-                        templates[0], templates[1], templates[2]
-                    )
-                    R_pred, t_pred, scores = self._pem(input_data, obj_feats)
+            pred_rot   = out['pred_R'].detach().cpu().numpy()
+            pred_trans = out['pred_t'].detach().cpu().numpy() * 1000  # → mm
 
-                # 最高スコアの結果を取得
-                best_idx = scores.argmax().item()
-                R = R_pred[best_idx].cpu().numpy().astype(np.float32)   # (3, 3)
-                t_mm = t_pred[best_idx].cpu().numpy().astype(np.float32)  # (3,) [mm]
-                t_m = t_mm / 1000.0  # mm → m
-
-                # マスク面積
-                best_det = detections[best_idx] if best_idx < len(detections) else detections[0]
-                mask_area = int(best_det.get("area", 0))
-
-            finally:
-                os.chdir(orig_dir)
+            best_idx = int(pose_scores.argmax())
+            R   = pred_rot[best_idx].astype(np.float32)
+            t_m = (pred_trans[best_idx] / 1000.0).astype(np.float32)  # mm → m
+            mask_area = int(dets[best_idx].get("area", 0)) if best_idx < len(dets) else 0
 
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
