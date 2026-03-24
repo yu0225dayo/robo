@@ -220,6 +220,12 @@ async def reconstruct_mesh(
     prompt_point = np.array([[click_x if click_x >= 0 else w // 2,
                                click_y if click_y >= 0 else h // 2]])
 
+    # 推論前にモデルをGPUへ復帰
+    import torch
+    sam_predictor.model.cuda()
+    if hasattr(sam3d_inference, "_pipeline"):
+        sam3d_inference._pipeline.cuda()
+
     sam_predictor.set_image(rgb)
     masks, scores, _ = sam_predictor.predict(
         point_coords=prompt_point,
@@ -239,10 +245,13 @@ async def reconstruct_mesh(
     output["gs"].save_ply(ply_path)
     print(f"[Server] PLY 保存: {ply_path}")
 
-    # SAM-3D 推論完了後にGPUキャッシュを解放 (SAM-6D がメモリを使えるように)
+    # SAM-3D 推論完了後にモデルをCPUへ退避 (SAM-6D の推論メモリを確保)
     import torch
+    sam_predictor.model.cpu()
+    if hasattr(sam3d_inference, "_pipeline"):
+        sam3d_inference._pipeline.cpu()
     torch.cuda.empty_cache()
-    print("[Server] GPU キャッシュ解放完了")
+    print("[Server] SAM-3D モデルをCPUへ退避・GPU解放完了")
 
     # 点群 → メッシュ変換 (SAM-6D は面付きメッシュを必要とする)
     import open3d as o3d
