@@ -239,6 +239,11 @@ async def reconstruct_mesh(
     output["gs"].save_ply(ply_path)
     print(f"[Server] PLY 保存: {ply_path}")
 
+    # SAM-3D 推論完了後にGPUキャッシュを解放 (SAM-6D がメモリを使えるように)
+    import torch
+    torch.cuda.empty_cache()
+    print("[Server] GPU キャッシュ解放完了")
+
     # 点群 → メッシュ変換 (SAM-6D は面付きメッシュを必要とする)
     import open3d as o3d
     print("[Server] 点群をメッシュに変換中 (Poisson reconstruction)...")
