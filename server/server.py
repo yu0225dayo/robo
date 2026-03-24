@@ -239,6 +239,16 @@ async def reconstruct_mesh(
     output["gs"].save_ply(ply_path)
     print(f"[Server] PLY 保存: {ply_path}")
 
+    # 点群 → メッシュ変換 (SAM-6D は面付きメッシュを必要とする)
+    import open3d as o3d
+    print("[Server] 点群をメッシュに変換中 (Poisson reconstruction)...")
+    gs_ply = o3d.io.read_point_cloud(ply_path)
+    gs_ply.estimate_normals()
+    mesh_o3d, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(gs_ply, depth=9)
+    mesh_path = ply_path.replace(".ply", "_mesh.ply")
+    o3d.io.write_triangle_mesh(mesh_path, mesh_o3d)
+    print(f"[Server] メッシュ保存: {mesh_path} ({len(mesh_o3d.triangles)} triangles)")
+
     ys, xs = np.where(best_mask)
     mask_center_u = int(xs.mean())
     mask_center_v = int(ys.mean())
@@ -246,7 +256,7 @@ async def reconstruct_mesh(
     # SAM-6D テンプレートレンダリング (Dockerコンテナ内パスで渡す)
     print("[Server] SAM-6D テンプレートレンダリング中...")
     tdir_resp = _sam6d_post("render_templates", {
-        "cad_path": to_docker_path(ply_path),
+        "cad_path": to_docker_path(mesh_path),
         "output_dir": None,
         "num_templates": 42,
     }, timeout=600.0)
@@ -254,14 +264,14 @@ async def reconstruct_mesh(
     print(f"[Server] テンプレート完了: {template_dir}")
 
     from fastapi.responses import Response
-    with open(ply_path, "rb") as f:
+    with open(mesh_path, "rb") as f:
         ply_bytes = f.read()
 
     return Response(
         content=ply_bytes,
         media_type="application/octet-stream",
         headers={
-            "X-Mesh-Path":     ply_path,
+            "X-Mesh-Path":     mesh_path,
             "X-Template-Dir":  template_dir,
             "X-Mask-Center-U": str(mask_center_u),
             "X-Mask-Center-V": str(mask_center_v),
