@@ -174,6 +174,155 @@ def _sam6d_post(endpoint: str, payload: dict, timeout: float = 300.0) -> dict:
                             f"SAM-6D サービスエラー: {e.response.text}")
 
 
+@app.post("/reconstruct_mesh")
+async def reconstruct_mesh(
+    image: UploadFile = File(...),
+    click_x: int = Form(-1),
+    click_y: int = Form(-1),
+    seed: int = Form(42),
+    target_points: int = Form(2048),
+    output_dir: str = Form("tmp/server_reconstructions"),
+):
+    """
+    クライアント互換エンドポイント: SAM-3D でメッシュ生成 + SAM-6D テンプレートレンダリング
+
+    レスポンス: PLY バイナリ
+    ヘッダ:
+        X-Mesh-Path:      サーバ側の .ply パス
+        X-Template-Dir:   SAM-6D テンプレートディレクトリ
+        X-Mask-Center-U:  マスク重心 U 座標
+        X-Mask-Center-V:  マスク重心 V 座標
+    """
+    if sam_predictor is None or sam3d_inference is None:
+        raise HTTPException(status_code=503, detail="モデルがロードされていません")
+
+    image_bytes = await image.read()
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise HTTPException(status_code=400, detail="画像のデコードに失敗しました")
+
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    h, w = rgb.shape[:2]
+
+    prompt_point = np.array([[click_x if click_x >= 0 else w // 2,
+                               click_y if click_y >= 0 else h // 2]])
+
+    sam_predictor.set_image(rgb)
+    masks, scores, _ = sam_predictor.predict(
+        point_coords=prompt_point,
+        point_labels=np.array([1]),
+        multimask_output=True,
+    )
+    best_mask = masks[np.argmax(scores)]
+    print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px)")
+
+    print("[Server] SAM-3D 推論中...")
+    output = sam3d_inference(rgb, best_mask, seed=seed)
+
+    os.makedirs(output_dir, exist_ok=True)
+    ply_path = os.path.join(output_dir, f"object_seed{seed}.ply")
+    output["gs"].save_ply(ply_path)
+    print(f"[Server] PLY 保存: {ply_path}")
+
+    ys, xs = np.where(best_mask)
+    mask_center_u = int(xs.mean())
+    mask_center_v = int(ys.mean())
+
+    # SAM-6D テンプレートレンダリング
+    print("[Server] SAM-6D テンプレートレンダリング中...")
+    tdir_resp = _sam6d_post("render_templates", {
+        "cad_path": ply_path,
+        "output_dir": None,
+        "num_templates": 42,
+    }, timeout=600.0)
+    template_dir = tdir_resp["template_dir"]
+    print(f"[Server] テンプレート完了: {template_dir}")
+
+    from fastapi.responses import Response
+    with open(ply_path, "rb") as f:
+        ply_bytes = f.read()
+
+    return Response(
+        content=ply_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "X-Mesh-Path":     ply_path,
+            "X-Template-Dir":  template_dir,
+            "X-Mask-Center-U": str(mask_center_u),
+            "X-Mask-Center-V": str(mask_center_v),
+        },
+    )
+
+
+@app.post("/pose_estimate")
+async def pose_estimate(
+    rgb_image: UploadFile = File(...),
+    depth_image: UploadFile = File(...),
+    fx: float = Form(...),
+    fy: float = Form(...),
+    cx: float = Form(...),
+    cy: float = Form(...),
+    mesh_path: str = Form(...),
+    template_dir: str = Form(...),
+    det_score_thresh: float = Form(0.2),
+):
+    """
+    クライアント互換エンドポイント: 6DoF 姿勢推定
+
+    depth_image: float32 生バイト列 (H×W×4 bytes, メートル単位)
+    """
+    import tempfile, shutil
+
+    rgb_bytes   = await rgb_image.read()
+    depth_bytes = await depth_image.read()
+
+    # RGB デコード
+    nparr = np.frombuffer(rgb_bytes, np.uint8)
+    bgr   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise HTTPException(400, "RGB画像のデコードに失敗しました")
+    h, w = bgr.shape[:2]
+
+    # depth: float32 生バイト → uint16 PNG [mm]
+    depth_f32 = np.frombuffer(depth_bytes, dtype=np.float32).reshape(h, w)
+    depth_mm  = (depth_f32 * 1000.0).astype(np.uint16)
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        rgb_path   = os.path.join(tmpdir, "rgb.png")
+        depth_path = os.path.join(tmpdir, "depth.png")
+        cam_path   = os.path.join(tmpdir, "camera.json")
+
+        cv2.imwrite(rgb_path, bgr)
+        cv2.imwrite(depth_path, depth_mm)
+
+        cam_json = {
+            "cam_K": [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0],
+            "depth_scale": 1.0,
+        }
+        with open(cam_path, "w") as f:
+            json.dump(cam_json, f)
+
+        result = _sam6d_post("estimate_pose", {
+            "rgb_path":         rgb_path,
+            "depth_path":       depth_path,
+            "cam_json_path":    cam_path,
+            "cad_path":         mesh_path,
+            "template_dir":     template_dir,
+            "det_score_thresh": det_score_thresh,
+        }, timeout=300.0)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return JSONResponse({
+        "success": True,
+        "R": result["R"],
+        "t": result["t"],
+        "mask_area": result.get("mask_area", 0),
+    })
+
+
 @app.get("/sam6d/health")
 def sam6d_health():
     """SAM-6D Docker サービスの死活確認"""
