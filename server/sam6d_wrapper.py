@@ -223,23 +223,32 @@ class SAM6DWrapper:
             import torch
             from run_inference_custom import get_templates, get_test_data
 
-            # Stage 1: Instance Segmentation → seg.json 保存
-            detections = self._ism.generate_proposals(
-                rgb_path=rgb_path,
-                stability_score_thresh=0.97,
-            )
-            if detections is None or len(detections) == 0:
+            # Stage 1: SAM でマスク生成 → COCO RLE 形式で seg.json 保存
+            import pycocotools.mask as cocomask
+
+            bgr_np = cv2.imread(rgb_path)
+            rgb_np = cv2.cvtColor(bgr_np, cv2.COLOR_BGR2RGB)
+
+            proposals = self._ism.segmentor_model.generate_masks(rgb_np)
+            masks = proposals["masks"]
+            if hasattr(masks, "cpu"):
+                masks = masks.cpu().numpy()  # (N, H, W) bool
+
+            if len(masks) == 0:
                 raise RuntimeError("物体が検出されませんでした。")
 
             seg_data = []
-            for det in detections:
+            for mask in masks:
+                mask_u8 = np.asfortranarray(mask.astype(np.uint8))
+                rle = cocomask.encode(mask_u8)
+                rle["counts"] = rle["counts"].decode("utf-8")
                 seg_data.append({
-                    "segmentation": det["segmentation"],
-                    "score": float(det["stability_score"]),
-                    "bbox": det["bbox"],
+                    "segmentation": {"size": list(mask.shape), "counts": rle["counts"]},
+                    "score": 1.0,
                 })
             with open(seg_path, "w") as f:
                 json.dump(seg_data, f)
+            print(f"[SAM-6D] SAM マスク生成完了: {len(seg_data)} 個")
 
             # Stage 2: テンプレート特徴量取得
             # render_custom_templates.py は output_dir/templates/ に保存する
