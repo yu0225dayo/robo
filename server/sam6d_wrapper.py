@@ -237,6 +237,11 @@ class SAM6DWrapper:
             if len(masks) == 0:
                 raise RuntimeError("物体が検出されませんでした。")
 
+            # 面積の大きい順に上位50個に絞る (GPU OOM 対策)
+            areas = masks.sum(axis=(1, 2))
+            top_idx = np.argsort(areas)[::-1][:50]
+            masks = masks[top_idx]
+
             seg_data = []
             for mask in masks:
                 mask_u8 = np.asfortranarray(mask.astype(np.uint8))
