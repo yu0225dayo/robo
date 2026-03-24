@@ -307,8 +307,6 @@ async def pose_estimate(
 
     depth_image: float32 生バイト列 (H×W×4 bytes, メートル単位)
     """
-    import tempfile, shutil
-
     rgb_bytes   = await rgb_image.read()
     depth_bytes = await depth_image.read()
 
@@ -323,7 +321,8 @@ async def pose_estimate(
     depth_f32 = np.frombuffer(depth_bytes, dtype=np.float32).reshape(h, w)
     depth_mm  = (depth_f32 * 1000.0).astype(np.uint16)
 
-    tmpdir = tempfile.mkdtemp()
+    import tempfile, shutil
+    tmpdir = tempfile.mkdtemp(dir=_host_tmp)
     try:
         rgb_path   = os.path.join(tmpdir, "rgb.png")
         depth_path = os.path.join(tmpdir, "depth.png")
@@ -340,9 +339,9 @@ async def pose_estimate(
             json.dump(cam_json, f)
 
         result = _sam6d_post("estimate_pose", {
-            "rgb_path":         rgb_path,
-            "depth_path":       depth_path,
-            "cam_json_path":    cam_path,
+            "rgb_path":         to_docker_path(rgb_path),
+            "depth_path":       to_docker_path(depth_path),
+            "cam_json_path":    to_docker_path(cam_path),
             "cad_path":         mesh_path,
             "template_dir":     template_dir,
             "det_score_thresh": det_score_thresh,
