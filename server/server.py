@@ -342,8 +342,8 @@ async def pose_estimate(
             "rgb_path":         to_docker_path(rgb_path),
             "depth_path":       to_docker_path(depth_path),
             "cam_json_path":    to_docker_path(cam_path),
-            "cad_path":         mesh_path,
-            "template_dir":     template_dir,
+            "cad_path":         to_docker_path(mesh_path),
+            "template_dir":     to_docker_path(template_dir),
             "det_score_thresh": det_score_thresh,
         }, timeout=300.0)
     finally:
