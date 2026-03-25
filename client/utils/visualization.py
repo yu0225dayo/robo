@@ -318,3 +318,70 @@ def project_hands_on_image(
     # 半透明合成
     result = _cv2.addWeighted(overlay, alpha, bgr, 1 - alpha, 0)
     return result
+
+
+def project_pointcloud_on_image(
+    bgr: np.ndarray,
+    points_3d: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    intrinsics,
+    point_color=(0, 255, 0),
+    bbox_color=(0, 255, 255),
+    point_size: int = 2,
+) -> np.ndarray:
+    """
+    3D点群とbboxをRGB画像に投影して重ね描きする
+
+    Args:
+        bgr:         (H, W, 3) カメラ画像 (BGR)
+        points_3d:   (N, 3) 物体座標系の点群 [mm単位 or 正規化]
+        R:           (3, 3) 回転行列 (物体→カメラ座標系)
+        t:           (3,)   平行移動 [m]
+        intrinsics:  CameraIntrinsics
+        point_color: 点群の描画色 (BGR)
+        bbox_color:  バウンディングボックスの描画色 (BGR)
+        point_size:  点の半径 [px]
+
+    Returns:
+        (H, W, 3) 投影結果画像
+    """
+    result = bgr.copy()
+    h, w = bgr.shape[:2]
+
+    # 物体座標系 → カメラ座標系: p_cam = R @ p_obj + t
+    pts_cam = (R @ points_3d.T).T + t  # (N, 3)
+
+    # カメラ座標 → 画像座標
+    valid = pts_cam[:, 2] > 0.01
+    pts_valid = pts_cam[valid]
+    us = (intrinsics.fx * pts_valid[:, 0] / pts_valid[:, 2] + intrinsics.cx).astype(np.int32)
+    vs = (intrinsics.fy * pts_valid[:, 1] / pts_valid[:, 2] + intrinsics.cy).astype(np.int32)
+
+    # 点群を描画
+    for u, v in zip(us, vs):
+        if 0 <= u < w and 0 <= v < h:
+            _cv2.circle(result, (u, v), point_size, point_color, -1)
+
+    # 3D bounding box を描画
+    mins = points_3d.min(axis=0)
+    maxs = points_3d.max(axis=0)
+    corners = np.array([
+        [mins[0], mins[1], mins[2]], [maxs[0], mins[1], mins[2]],
+        [maxs[0], maxs[1], mins[2]], [mins[0], maxs[1], mins[2]],
+        [mins[0], mins[1], maxs[2]], [maxs[0], mins[1], maxs[2]],
+        [maxs[0], maxs[1], maxs[2]], [mins[0], maxs[1], maxs[2]],
+    ])
+    corners_cam = (R @ corners.T).T + t
+    edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+    for i, j in edges:
+        c1, c2 = corners_cam[i], corners_cam[j]
+        if c1[2] > 0.01 and c2[2] > 0.01:
+            u1 = int(intrinsics.fx * c1[0] / c1[2] + intrinsics.cx)
+            v1 = int(intrinsics.fy * c1[1] / c1[2] + intrinsics.cy)
+            u2 = int(intrinsics.fx * c2[0] / c2[2] + intrinsics.cx)
+            v2 = int(intrinsics.fy * c2[1] / c2[2] + intrinsics.cy)
+            if (0 <= u1 < w and 0 <= v1 < h) or (0 <= u2 < w and 0 <= v2 < h):
+                _cv2.line(result, (u1, v1), (u2, v2), bbox_color, 2, _cv2.LINE_AA)
+
+    return result

@@ -103,7 +103,7 @@ def run_online(args, config):
         CameraIntrinsics, ObjectPose,
         estimate_scale_from_depth, normalized_to_camera,
     )
-    from utils.visualization import project_hands_on_image
+    from utils.visualization import project_hands_on_image, project_pointcloud_on_image
     from utils.pointcloud_utils import load_pointcloud_ply
 
     sam_cfg  = config["sam3d"]
@@ -152,8 +152,19 @@ def run_online(args, config):
     print(f"  R=\n{R}")
     print(f"  t={t}")
 
-    # ---- スケール推定 ----
+    # ---- 点群 + bbox をRGB画像に投影して確認 ----
     mesh_pts = load_pointcloud_ply(args.mesh, target_points=2048)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    vis_img = project_pointcloud_on_image(bgr, mesh_pts, R, t, intrinsics)
+    os.makedirs("output/test", exist_ok=True)
+    vis_path = "output/test/pose_check.png"
+    cv2.imwrite(vis_path, vis_img)
+    print(f"[Pose確認] 点群+bbox投影画像を保存: {vis_path}")
+    cv2.imshow("Pose Check: pointcloud + bbox", vis_img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    # ---- スケール推定 ----
     mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
     mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
     scale = estimate_scale_from_depth(depth, mask_u, mask_v, intrinsics, mesh_pts)

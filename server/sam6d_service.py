@@ -151,6 +151,7 @@ def estimate_pose(req: EstimatePoseRequest):
     K = cam["cam_K"]
     intrinsics = {"fx": K[0], "fy": K[4], "cx": K[2], "cy": K[5]}
 
+    import torch
     R, t, mask_area = _wrapper.estimate_pose(
         rgb=rgb,
         depth_m=depth_m,
@@ -159,6 +160,7 @@ def estimate_pose(req: EstimatePoseRequest):
         template_dir=req.template_dir,
         det_score_thresh=req.det_score_thresh,
     )
+    torch.cuda.empty_cache()
 
     return JSONResponse({
         "R": R.tolist(),
@@ -208,6 +210,7 @@ def full_estimate(req: FullEstimateRequest):
         depth_mm = cv2.imread(req.depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32)
         depth_m = depth_mm / 1000.0
 
+        import torch
         intr_dict = {k: float(v) for k, v in req.intrinsics.items()}
         R, t, mask_area = _wrapper.estimate_pose(
             rgb=rgb,
@@ -216,6 +219,7 @@ def full_estimate(req: FullEstimateRequest):
             cad_path_mm=req.cad_path,
             template_dir=tdir,
         )
+        torch.cuda.empty_cache()
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

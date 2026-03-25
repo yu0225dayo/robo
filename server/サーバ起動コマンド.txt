@@ -73,10 +73,3 @@ docker logs -f sam6d_service   # "models_loaded" が出るまで待つ
 ターミナル2 (SAM-3D を起動):
 
 
-conda activate sam3d-objects
-python ~/ws/project/server.py \
-  --sam-checkpoint ~/ws/project/sam_vit_h_4b8939.pth \
-  --sam3d-config   ~/ws/project/sam-3d-objects/checkpoints/hf/pipeline.yaml \
-  --sam3d-repo     ~/ws/project/sam-3d-objects \
-  --sam6d-service  http://localhost:8081 \
-  --host 0.0.0.0 --port 8080

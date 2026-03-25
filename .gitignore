@@ -20,6 +20,9 @@ tmp/
 *.tmp
 *.log
 
+# PyTorch / Hugging Face キャッシュ
+.cache/
+
 # OS
 .DS_Store
 

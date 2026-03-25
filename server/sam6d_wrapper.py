@@ -233,13 +233,14 @@ class SAM6DWrapper:
             masks = proposals["masks"]
             if hasattr(masks, "cpu"):
                 masks = masks.cpu().numpy()  # (N, H, W) bool
+            del proposals  # GPU中間テンソルを解放
 
             if len(masks) == 0:
                 raise RuntimeError("物体が検出されませんでした。")
 
-            # 面積の大きい順に上位50個に絞る (GPU OOM 対策)
+            # 面積の大きい順に上位10個に絞る (GPU OOM 対策: pairwise_distance が O(N^2) のため)
             areas = masks.sum(axis=(1, 2))
-            top_idx = np.argsort(areas)[::-1][:50]
+            top_idx = np.argsort(areas)[::-1][:10]
             masks = masks[top_idx]
 
             seg_data = []
@@ -254,6 +255,7 @@ class SAM6DWrapper:
             with open(seg_path, "w") as f:
                 json.dump(seg_data, f)
             print(f"[SAM-6D] SAM マスク生成完了: {len(seg_data)} 個")
+            torch.cuda.empty_cache()  # ISM後のキャッシュ解放
 
             # Stage 2: テンプレート特徴量取得
             # render_custom_templates.py は output_dir/templates/ に保存する
@@ -295,6 +297,11 @@ class SAM6DWrapper:
             R   = pred_rot[best_idx].astype(np.float32)
             t_m = (pred_trans[best_idx] / 1000.0).astype(np.float32)  # mm → m
             mask_area = int(dets[best_idx].get("area", 0)) if best_idx < len(dets) else 0
+
+            # 推論後に中間テンソルを明示的に解放
+            del all_tem, all_tem_pts, all_tem_choose, all_tem_feat
+            del input_data, out
+            torch.cuda.empty_cache()
 
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)

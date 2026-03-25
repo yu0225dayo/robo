@@ -28,10 +28,15 @@ import uvicorn
 
 app = FastAPI(title="SAM 3D + SAM-6D Pipeline Server")
 
-# グローバルモデル (起動時にロード)
+# SAM のみ起動時にロード (軽量なのでキープ)
 sam_predictor = None
-sam3d_inference = None
 args_global = None
+
+# SAM-3D はオンデマンドロード (推論後に削除してGPUを解放)
+# モデル自体は保持せず、設定パスだけ保持する
+_sam3d_config: str = ""
+_sam3d_repo: str   = ""
+_sam3d_device: str = "cuda"
 
 # SAM-6D サービス URL (Docker コンテナ)
 _sam6d_url: str = "http://localhost:8081"
@@ -51,7 +56,13 @@ def to_docker_path(host_path: str) -> str:
 
 def load_models(sam_checkpoint: str, sam3d_config: str, sam3d_repo: str,
                 device: str = "cuda"):
-    global sam_predictor, sam3d_inference
+    """SAM のみ起動時にロード。SAM-3D はオンデマンドロード。"""
+    global sam_predictor, _sam3d_config, _sam3d_repo, _sam3d_device
+
+    # SAM-3D の設定パスを保存 (モデル本体はロードしない)
+    _sam3d_config = sam3d_config
+    _sam3d_repo   = sam3d_repo
+    _sam3d_device = device
 
     # sam-3d-objects をパスに追加 (notebook/ に inference.py がある)
     notebook_path = os.path.join(sam3d_repo, "notebook")
@@ -59,17 +70,33 @@ def load_models(sam_checkpoint: str, sam3d_config: str, sam3d_repo: str,
         if p not in sys.path:
             sys.path.insert(0, p)
 
-    # SAM
+    # SAM (軽量なのでキープ)
     from segment_anything import sam_model_registry, SamPredictor
     sam = sam_model_registry["vit_h"](checkpoint=sam_checkpoint)
     sam.to(device=device)
     sam_predictor = SamPredictor(sam)
     print(f"[Server] SAM ロード完了 ({device})")
+    print("[Server] SAM-3D はリクエスト時にオンデマンドロードします")
 
-    # sam-3d-objects
+
+def _load_sam3d_and_run(rgb, best_mask, seed):
+    """SAM-3D をロード → 推論 → 即削除してGPUを解放する"""
+    import gc
+    import torch
     from inference import Inference
-    sam3d_inference = Inference(sam3d_config, compile=False)
-    print("[Server] sam-3d-objects ロード完了")
+
+    print("[Server] SAM-3D ロード中...")
+    sam3d = Inference(_sam3d_config, compile=False)
+    try:
+        print("[Server] SAM-3D 推論中...")
+        output = sam3d(rgb, best_mask, seed=seed)
+        return output
+    finally:
+        # 推論後に即削除してGPUを解放
+        del sam3d
+        gc.collect()
+        torch.cuda.empty_cache()
+        print("[Server] SAM-3D 削除・GPU解放完了")
 
 
 @app.get("/health")
@@ -100,7 +127,7 @@ async def reconstruct(
         JSON: {"points": [[x,y,z], ...], "num_points": N,
                "mask_center_u": int, "mask_center_v": int}
     """
-    if sam_predictor is None or sam3d_inference is None:
+    if sam_predictor is None:
         raise HTTPException(status_code=503, detail="モデルがロードされていません")
 
     # 画像をデコード
@@ -130,9 +157,8 @@ async def reconstruct(
     print(f"[Server] SAM マスク生成完了 (面積: {best_mask.sum()} px, "
           f"プロンプト: ({prompt_point[0][0]}, {prompt_point[0][1]}))")
 
-    # Step 2: sam-3d-objects で完全3Dモデル生成
-    print("[Server] sam-3d-objects 推論中...")
-    output = sam3d_inference(rgb, best_mask, seed=seed)
+    # Step 2: SAM-3D でモデル生成 (推論後に即削除)
+    output = _load_sam3d_and_run(rgb, best_mask, seed)
 
     # Step 3: PLY保存 → XYZ抽出
     os.makedirs(output_dir, exist_ok=True)
@@ -205,7 +231,7 @@ async def reconstruct_mesh(
         X-Mask-Center-U:  マスク重心 U 座標
         X-Mask-Center-V:  マスク重心 V 座標
     """
-    if sam_predictor is None or sam3d_inference is None:
+    if sam_predictor is None:
         raise HTTPException(status_code=503, detail="モデルがロードされていません")
 
     image_bytes = await image.read()
@@ -220,12 +246,6 @@ async def reconstruct_mesh(
     prompt_point = np.array([[click_x if click_x >= 0 else w // 2,
                                click_y if click_y >= 0 else h // 2]])
 
-    # 推論前にモデルをGPUへ復帰
-    import torch
-    sam_predictor.model.cuda()
-    if hasattr(sam3d_inference, "_pipeline"):
-        sam3d_inference._pipeline.cuda()
-
     sam_predictor.set_image(rgb)
     masks, scores, _ = sam_predictor.predict(
         point_coords=prompt_point,
@@ -235,8 +255,8 @@ async def reconstruct_mesh(
     best_mask = masks[np.argmax(scores)]
     print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px)")
 
-    print("[Server] SAM-3D 推論中...")
-    output = sam3d_inference(rgb, best_mask, seed=seed)
+    # SAM-3D をロード → 推論 → 即削除してGPUを解放
+    output = _load_sam3d_and_run(rgb, best_mask, seed)
 
     # 共有tmpに保存してDockerからアクセスできるようにする
     save_dir = output_dir if output_dir else os.path.join(_host_tmp, "server_reconstructions")
@@ -244,14 +264,6 @@ async def reconstruct_mesh(
     ply_path = os.path.join(save_dir, f"object_seed{seed}.ply")
     output["gs"].save_ply(ply_path)
     print(f"[Server] PLY 保存: {ply_path}")
-
-    # SAM-3D 推論完了後にモデルをCPUへ退避 (SAM-6D の推論メモリを確保)
-    import torch
-    sam_predictor.model.cpu()
-    if hasattr(sam3d_inference, "_pipeline"):
-        sam3d_inference._pipeline.cpu()
-    torch.cuda.empty_cache()
-    print("[Server] SAM-3D モデルをCPUへ退避・GPU解放完了")
 
     # 点群 → メッシュ変換 (SAM-6D は面付きメッシュを必要とする)
     import open3d as o3d
@@ -512,8 +524,8 @@ async def full_pipeline(
             "mask_center_v": int,
         }
     """
-    if sam_predictor is None or sam3d_inference is None:
-        raise HTTPException(503, "SAM-3D モデルがロードされていません")
+    if sam_predictor is None:
+        raise HTTPException(503, "SAM モデルがロードされていません")
 
     import tempfile, shutil
 
@@ -540,8 +552,8 @@ async def full_pipeline(
     best_mask = masks[np.argmax(scores)]
     print(f"[Pipeline] SAM マスク完了 (面積:{best_mask.sum()}px)")
 
-    print("[Pipeline] SAM-3D 推論中...")
-    recon_output = sam3d_inference(rgb, best_mask, seed=seed)
+    # SAM-3D をロード → 推論 → 即削除してGPUを解放
+    recon_output = _load_sam3d_and_run(rgb, best_mask, seed)
 
     os.makedirs(output_dir, exist_ok=True)
     ply_path = os.path.join(output_dir, f"object_seed{seed}.ply")
