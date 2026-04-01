@@ -329,19 +329,21 @@ def project_pointcloud_on_image(
     point_color=(0, 255, 0),
     bbox_color=(0, 255, 255),
     point_size: int = 2,
+    points_unit: str = "mm",
 ) -> np.ndarray:
     """
     3D点群とbboxをRGB画像に投影して重ね描きする
 
     Args:
         bgr:         (H, W, 3) カメラ画像 (BGR)
-        points_3d:   (N, 3) 物体座標系の点群 [mm単位 or 正規化]
+        points_3d:   (N, 3) 物体座標系の点群
         R:           (3, 3) 回転行列 (物体→カメラ座標系)
         t:           (3,)   平行移動 [m]
         intrinsics:  CameraIntrinsics
         point_color: 点群の描画色 (BGR)
         bbox_color:  バウンディングボックスの描画色 (BGR)
         point_size:  点の半径 [px]
+        points_unit: 点群の単位 ("mm" or "m"). SAM-3D生成メッシュは "mm"
 
     Returns:
         (H, W, 3) 投影結果画像
@@ -349,23 +351,26 @@ def project_pointcloud_on_image(
     result = bgr.copy()
     h, w = bgr.shape[:2]
 
-    # 物体座標系 → カメラ座標系: p_cam = R @ p_obj + t
-    pts_cam = (R @ points_3d.T).T + t  # (N, 3)
+    # 単位変換: メッシュPLYはmm単位、tはm単位なので合わせる
+    pts_m = points_3d / 1000.0 if points_unit == "mm" else points_3d
 
-    # カメラ座標 → 画像座標
+    # 物体座標系 → カメラ座標系: p_cam = R @ p_obj_m + t_m
+    pts_cam = (R @ pts_m.T).T + t  # (N, 3) [m]
+
+    # カメラ座標 → 画像座標 (ベクトル化)
     valid = pts_cam[:, 2] > 0.01
     pts_valid = pts_cam[valid]
     us = (intrinsics.fx * pts_valid[:, 0] / pts_valid[:, 2] + intrinsics.cx).astype(np.int32)
     vs = (intrinsics.fy * pts_valid[:, 1] / pts_valid[:, 2] + intrinsics.cy).astype(np.int32)
 
-    # 点群を描画
-    for u, v in zip(us, vs):
-        if 0 <= u < w and 0 <= v < h:
-            _cv2.circle(result, (u, v), point_size, point_color, -1)
+    # 画像範囲内の点のみ描画 (ベクトル化)
+    in_bounds = (us >= 0) & (us < w) & (vs >= 0) & (vs < h)
+    for u, v in zip(us[in_bounds], vs[in_bounds]):
+        _cv2.circle(result, (int(u), int(v)), point_size, point_color, -1)
 
-    # 3D bounding box を描画
-    mins = points_3d.min(axis=0)
-    maxs = points_3d.max(axis=0)
+    # 3D bounding box を描画 (mm→m変換済み座標で計算)
+    mins = pts_m.min(axis=0)
+    maxs = pts_m.max(axis=0)
     corners = np.array([
         [mins[0], mins[1], mins[2]], [maxs[0], mins[1], mins[2]],
         [maxs[0], maxs[1], mins[2]], [mins[0], maxs[1], mins[2]],
@@ -383,5 +388,109 @@ def project_pointcloud_on_image(
             v2 = int(intrinsics.fy * c2[1] / c2[2] + intrinsics.cy)
             if (0 <= u1 < w and 0 <= v1 < h) or (0 <= u2 < w and 0 <= v2 < h):
                 _cv2.line(result, (u1, v1), (u2, v2), bbox_color, 2, _cv2.LINE_AA)
+
+    return result
+
+
+def render_mesh_on_image(
+    bgr: np.ndarray,
+    mesh_path: str,
+    R: np.ndarray,
+    t: np.ndarray,
+    intrinsics,
+    mesh_unit: str = "mm",
+    alpha: float = 0.6,
+    mesh_color: tuple = (0.2, 0.8, 0.2),
+) -> np.ndarray:
+    """
+    FoundationPose的手法: Open3D OffscreenRenderer でメッシュ面をレンダリングして重ね描きする
+
+    点群投影より高品質:
+    - メッシュ面全体をレンダリング (まばらな点ではなく面)
+    - Z-buffer による自然なOcclusion処理
+    - 照明・陰影付き
+
+    Args:
+        bgr:        (H, W, 3) カメラ画像 (BGR)
+        mesh_path:  三角メッシュPLYファイルパス
+        R:          (3, 3) 回転行列 (物体→カメラ座標系)
+        t:          (3,)   平行移動 [m]
+        intrinsics: CameraIntrinsics
+        mesh_unit:  メッシュの単位 ("mm" or "m"). SAM-3D生成メッシュは "mm"
+        alpha:      メッシュオーバーレイの不透明度 (0.0〜1.0)
+        mesh_color: メッシュの色 (R, G, B) 各0.0〜1.0
+
+    Returns:
+        (H, W, 3) レンダリング結果画像 (BGR)
+    """
+    try:
+        import open3d as o3d
+        import open3d.visualization.rendering as rendering
+    except ImportError:
+        print("[render_mesh] open3d が見つかりません。project_pointcloud_on_image にフォールバック")
+        return bgr.copy()
+
+    h, w = bgr.shape[:2]
+
+    # メッシュをロード
+    mesh = o3d.io.read_triangle_mesh(mesh_path)
+    if len(mesh.triangles) == 0:
+        # 面なし → 点群として扱い、フォールバック
+        print("[render_mesh] メッシュに面がありません。点群投影にフォールバック")
+        pcd = o3d.io.read_point_cloud(mesh_path)
+        pts = np.asarray(pcd.points).astype(np.float32)
+        return project_pointcloud_on_image(bgr, pts, R, t, intrinsics, points_unit=mesh_unit)
+
+    mesh.compute_vertex_normals()
+
+    # 単位変換: mm → m
+    if mesh_unit == "mm":
+        mesh.scale(0.001, center=np.array([0.0, 0.0, 0.0]))
+
+    # 物体座標系 → カメラ座標系への変換行列 (4×4)
+    # Open3DはOpenGL座標系(Y上、Z奥がマイナス)ではなくOpenCV座標系を使う
+    T_obj2cam = np.eye(4, dtype=np.float64)
+    T_obj2cam[:3, :3] = R.astype(np.float64)
+    T_obj2cam[:3, 3]  = t.astype(np.float64)
+
+    mesh.transform(T_obj2cam)
+
+    # Open3D OffscreenRenderer セットアップ
+    renderer = rendering.OffscreenRenderer(w, h)
+    renderer.scene.set_background([0.0, 0.0, 0.0, 0.0])  # 透明背景
+
+    mat = rendering.MaterialRecord()
+    mat.shader = "defaultLit"
+    mat.base_color = [mesh_color[0], mesh_color[1], mesh_color[2], 1.0]
+
+    renderer.scene.add_geometry("mesh", mesh, mat)
+
+    # 照明設定
+    renderer.scene.scene.set_sun_light(
+        [0.577, -0.577, -0.577], [1.0, 1.0, 1.0], 75000
+    )
+    renderer.scene.scene.enable_sun_light(True)
+
+    # カメラ設定: Open3D はピンホールカメラ内部パラメータを直接設定できる
+    renderer.setup_camera(
+        intrinsics.fx, intrinsics.fy,
+        intrinsics.cx, intrinsics.cy,
+        w, h,
+    )
+
+    # レンダリング実行
+    rendered = renderer.render_to_image()
+    rendered_np = np.asarray(rendered)[:, :, :3]  # (H, W, 3) RGB
+
+    # BGR に変換
+    rendered_bgr = _cv2.cvtColor(rendered_np, _cv2.COLOR_RGB2BGR)
+
+    # メッシュが描画された画素のみブレンド (黒=背景を除外)
+    mask = rendered_bgr.sum(axis=2) > 0
+    result = bgr.copy()
+    result[mask] = (
+        alpha * rendered_bgr[mask].astype(np.float32)
+        + (1 - alpha) * bgr[mask].astype(np.float32)
+    ).astype(np.uint8)
 
     return result

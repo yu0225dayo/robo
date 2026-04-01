@@ -103,7 +103,7 @@ def run_online(args, config):
         CameraIntrinsics, ObjectPose,
         estimate_scale_from_depth, normalized_to_camera,
     )
-    from utils.visualization import project_hands_on_image, project_pointcloud_on_image
+    from utils.visualization import project_hands_on_image, project_pointcloud_on_image, render_mesh_on_image
     from utils.pointcloud_utils import load_pointcloud_ply
 
     sam_cfg  = config["sam3d"]
@@ -152,15 +152,25 @@ def run_online(args, config):
     print(f"  R=\n{R}")
     print(f"  t={t}")
 
-    # ---- 点群 + bbox をRGB画像に投影して確認 ----
+    # ---- メッシュをRGB画像にレンダリングして確認 ----
     mesh_pts = load_pointcloud_ply(args.mesh, target_points=2048)
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-    vis_img = project_pointcloud_on_image(bgr, mesh_pts, R, t, intrinsics)
     os.makedirs("output/test", exist_ok=True)
-    vis_path = "output/test/pose_check.png"
+
+    # Open3D OffscreenRenderer でメッシュ面をレンダリング (FoundationPose的手法)
+    vis_img = render_mesh_on_image(bgr, args.mesh, R, t, intrinsics, mesh_unit="mm")
+    vis_path = "output/test/pose_check_mesh.png"
     cv2.imwrite(vis_path, vis_img)
-    print(f"[Pose確認] 点群+bbox投影画像を保存: {vis_path}")
-    cv2.imshow("Pose Check: pointcloud + bbox", vis_img)
+    print(f"[Pose確認] メッシュレンダリング画像を保存: {vis_path}")
+
+    # 点群+bbox投影も保存 (比較用)
+    vis_pts_img = project_pointcloud_on_image(bgr, mesh_pts, R, t, intrinsics, points_unit="mm")
+    vis_pts_path = "output/test/pose_check_pts.png"
+    cv2.imwrite(vis_pts_path, vis_pts_img)
+    print(f"[Pose確認] 点群+bbox投影画像を保存: {vis_pts_path}")
+
+    cv2.imshow("Pose Check: mesh render", vis_img)
+    cv2.imshow("Pose Check: pointcloud + bbox", vis_pts_img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
