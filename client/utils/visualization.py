@@ -426,71 +426,68 @@ def render_mesh_on_image(
     try:
         import open3d as o3d
         import open3d.visualization.rendering as rendering
-    except ImportError:
-        print("[render_mesh] open3d が見つかりません。project_pointcloud_on_image にフォールバック")
-        return bgr.copy()
 
-    h, w = bgr.shape[:2]
+        h, w = bgr.shape[:2]
 
-    # メッシュをロード
-    mesh = o3d.io.read_triangle_mesh(mesh_path)
-    if len(mesh.triangles) == 0:
-        # 面なし → 点群として扱い、フォールバック
-        print("[render_mesh] メッシュに面がありません。点群投影にフォールバック")
-        pcd = o3d.io.read_point_cloud(mesh_path)
-        pts = np.asarray(pcd.points).astype(np.float32)
-        return project_pointcloud_on_image(bgr, pts, R, t, intrinsics, points_unit=mesh_unit)
+        mesh = o3d.io.read_triangle_mesh(mesh_path)
+        if len(mesh.triangles) == 0:
+            raise RuntimeError("メッシュに面がありません")
 
-    mesh.compute_vertex_normals()
+        mesh.compute_vertex_normals()
+        if mesh_unit == "mm":
+            mesh.scale(0.001, center=np.array([0.0, 0.0, 0.0]))
 
-    # 単位変換: mm → m
-    if mesh_unit == "mm":
-        mesh.scale(0.001, center=np.array([0.0, 0.0, 0.0]))
+        T_obj2cam = np.eye(4, dtype=np.float64)
+        T_obj2cam[:3, :3] = R.astype(np.float64)
+        T_obj2cam[:3, 3]  = t.astype(np.float64)
+        mesh.transform(T_obj2cam)
 
-    # 物体座標系 → カメラ座標系への変換行列 (4×4)
-    # Open3DはOpenGL座標系(Y上、Z奥がマイナス)ではなくOpenCV座標系を使う
-    T_obj2cam = np.eye(4, dtype=np.float64)
-    T_obj2cam[:3, :3] = R.astype(np.float64)
-    T_obj2cam[:3, 3]  = t.astype(np.float64)
+        renderer = rendering.OffscreenRenderer(w, h)
+        renderer.scene.set_background([0.0, 0.0, 0.0, 0.0])
 
-    mesh.transform(T_obj2cam)
+        mat = rendering.MaterialRecord()
+        mat.shader = "defaultLit"
+        mat.base_color = [mesh_color[0], mesh_color[1], mesh_color[2], 1.0]
+        renderer.scene.add_geometry("mesh", mesh, mat)
 
-    # Open3D OffscreenRenderer セットアップ
-    renderer = rendering.OffscreenRenderer(w, h)
-    renderer.scene.set_background([0.0, 0.0, 0.0, 0.0])  # 透明背景
+        renderer.scene.scene.set_sun_light(
+            [0.577, -0.577, -0.577], [1.0, 1.0, 1.0], 75000
+        )
+        renderer.scene.scene.enable_sun_light(True)
+        renderer.setup_camera(
+            intrinsics.fx, intrinsics.fy,
+            intrinsics.cx, intrinsics.cy,
+            w, h,
+        )
 
-    mat = rendering.MaterialRecord()
-    mat.shader = "defaultLit"
-    mat.base_color = [mesh_color[0], mesh_color[1], mesh_color[2], 1.0]
+        rendered = renderer.render_to_image()
+        rendered_bgr = _cv2.cvtColor(np.asarray(rendered)[:, :, :3], _cv2.COLOR_RGB2BGR)
 
-    renderer.scene.add_geometry("mesh", mesh, mat)
+        mask = rendered_bgr.sum(axis=2) > 0
+        result = bgr.copy()
+        result[mask] = (
+            alpha * rendered_bgr[mask].astype(np.float32)
+            + (1 - alpha) * bgr[mask].astype(np.float32)
+        ).astype(np.uint8)
+        return result
 
-    # 照明設定
-    renderer.scene.scene.set_sun_light(
-        [0.577, -0.577, -0.577], [1.0, 1.0, 1.0], 75000
+    except Exception as e:
+        # EGL初期化失敗・open3d未インストール・面なしメッシュなどのフォールバック
+        print(f"[render_mesh] レンダラー初期化失敗 ({e}). 密点群投影にフォールバック")
+
+    # フォールバック: メッシュ頂点を全点使って密に投影 (ダウンサンプリングなし)
+    try:
+        import open3d as o3d
+        mesh_fb = o3d.io.read_triangle_mesh(mesh_path)
+        pts = np.asarray(mesh_fb.vertices).astype(np.float32)
+    except Exception:
+        from utils.pointcloud_utils import load_pointcloud_ply
+        pts = load_pointcloud_ply(mesh_path)
+
+    return project_pointcloud_on_image(
+        bgr, pts, R, t, intrinsics,
+        point_color=(0, 220, 0),
+        bbox_color=(0, 220, 220),
+        point_size=2,
+        points_unit=mesh_unit,
     )
-    renderer.scene.scene.enable_sun_light(True)
-
-    # カメラ設定: Open3D はピンホールカメラ内部パラメータを直接設定できる
-    renderer.setup_camera(
-        intrinsics.fx, intrinsics.fy,
-        intrinsics.cx, intrinsics.cy,
-        w, h,
-    )
-
-    # レンダリング実行
-    rendered = renderer.render_to_image()
-    rendered_np = np.asarray(rendered)[:, :, :3]  # (H, W, 3) RGB
-
-    # BGR に変換
-    rendered_bgr = _cv2.cvtColor(rendered_np, _cv2.COLOR_RGB2BGR)
-
-    # メッシュが描画された画素のみブレンド (黒=背景を除外)
-    mask = rendered_bgr.sum(axis=2) > 0
-    result = bgr.copy()
-    result[mask] = (
-        alpha * rendered_bgr[mask].astype(np.float32)
-        + (1 - alpha) * bgr[mask].astype(np.float32)
-    ).astype(np.uint8)
-
-    return result
