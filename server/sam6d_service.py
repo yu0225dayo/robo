@@ -50,6 +50,8 @@ class EstimatePoseRequest(BaseModel):
     cad_path: str           # 計算機上の PLY パス [mm単位]
     template_dir: str       # render_templates() 出力ディレクトリ
     det_score_thresh: float = 0.2
+    click_x: int = -1
+    click_y: int = -1
 
 
 class FullEstimateRequest(BaseModel):
@@ -159,6 +161,8 @@ def estimate_pose(req: EstimatePoseRequest):
         cad_path_mm=req.cad_path,
         template_dir=req.template_dir,
         det_score_thresh=req.det_score_thresh,
+        click_x=req.click_x,
+        click_y=req.click_y,
     )
     torch.cuda.empty_cache()
 

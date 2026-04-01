@@ -171,6 +171,8 @@ class SAM6DWrapper:
         cad_path_mm: str,
         template_dir: str,
         det_score_thresh: float = 0.2,
+        click_x: int = -1,
+        click_y: int = -1,
     ):
         """
         RGBD + CADモデルから 6DoF pose を推定する
@@ -223,39 +225,147 @@ class SAM6DWrapper:
             import torch
             from run_inference_custom import get_templates, get_test_data
 
-            # Stage 1: SAM でマスク生成 → COCO RLE 形式で seg.json 保存
+            # Stage 1: セグメンテーション
             import pycocotools.mask as cocomask
-
             bgr_np = cv2.imread(rgb_path)
             rgb_np = cv2.cvtColor(bgr_np, cv2.COLOR_BGR2RGB)
 
-            proposals = self._ism.segmentor_model.generate_masks(rgb_np)
-            masks = proposals["masks"]
-            if hasattr(masks, "cpu"):
-                masks = masks.cpu().numpy()  # (N, H, W) bool
-            del proposals  # GPU中間テンソルを解放
+            if click_x >= 0 and click_y >= 0:
+                # --- クリック座標あり: SAM 点プロンプトで直接セグメント ---
+                print(f"[SAM-6D] SAM 点プロンプト: ({click_x}, {click_y})")
+                predictor = self._ism.segmentor_model.predictor
+                predictor.set_image(rgb_np)
+                sam_masks, sam_scores, _ = predictor.predict(
+                    point_coords=np.array([[click_x, click_y]]),
+                    point_labels=np.array([1]),
+                    multimask_output=True,
+                )
+                # sam_masks: (3, H, W) bool, スコア降順で保存
+                order = np.argsort(sam_scores)[::-1]
+                seg_data = []
+                for i in order:
+                    mask = sam_masks[i]
+                    mask_u8 = np.asfortranarray(mask.astype(np.uint8))
+                    rle = cocomask.encode(mask_u8)
+                    rle["counts"] = rle["counts"].decode("utf-8")
+                    seg_data.append({
+                        "segmentation": {"size": list(mask.shape), "counts": rle["counts"]},
+                        "score": float(sam_scores[i]),
+                    })
+                print(f"[SAM-6D] 点プロンプト完了: {len(seg_data)} マスク")
+            else:
+                # --- クリック座標なし: 完全 ISM パイプライン ---
+                import glob as _glob
+                import trimesh
+                from PIL import Image as PILImage
+                from utils.bbox_utils import CropResizePad
+                from utils.poses.pose_utils import (
+                    get_obj_poses_from_template_level,
+                    load_index_level_in_level2,
+                )
+                from model.utils import Detections
 
-            if len(masks) == 0:
-                raise RuntimeError("物体が検出されませんでした。")
+                device = torch.device(self.device)
 
-            # 面積の大きい順に上位10個に絞る (GPU OOM 対策: pairwise_distance が O(N^2) のため)
-            areas = masks.sum(axis=(1, 2))
-            top_idx = np.argsort(areas)[::-1][:10]
-            masks = masks[top_idx]
+                tem_path_ism = os.path.join(template_dir, "templates")
+                n_tem = len(_glob.glob(f"{tem_path_ism}/rgb_*.png"))
+                if n_tem == 0:
+                    raise RuntimeError(f"テンプレートが見つかりません: {tem_path_ism}")
 
-            seg_data = []
-            for mask in masks:
-                mask_u8 = np.asfortranarray(mask.astype(np.uint8))
-                rle = cocomask.encode(mask_u8)
-                rle["counts"] = rle["counts"].decode("utf-8")
-                seg_data.append({
-                    "segmentation": {"size": list(mask.shape), "counts": rle["counts"]},
-                    "score": 1.0,
-                })
+                boxes_t, masks_t, templates_t = [], [], []
+                for idx in range(n_tem):
+                    img_t = PILImage.open(os.path.join(tem_path_ism, f"rgb_{idx}.png"))
+                    msk_t = PILImage.open(os.path.join(tem_path_ism, f"mask_{idx}.png"))
+                    boxes_t.append(msk_t.getbbox())
+                    img_arr = torch.from_numpy(np.array(img_t.convert("RGB")) / 255).float()
+                    msk_arr = torch.from_numpy(np.array(msk_t.convert("L")) / 255).float()
+                    img_arr = img_arr * msk_arr[:, :, None]
+                    templates_t.append(img_arr)
+                    masks_t.append(msk_arr.unsqueeze(-1))
+
+                templates_t    = torch.stack(templates_t).permute(0, 3, 1, 2)
+                masks_t        = torch.stack(masks_t).permute(0, 3, 1, 2)
+                boxes_t_tensor = torch.tensor(np.array(boxes_t))
+
+                proposal_processor = CropResizePad(224)
+                templates_proc = proposal_processor(images=templates_t, boxes=boxes_t_tensor).to(device)
+                masks_cropped  = proposal_processor(images=masks_t,     boxes=boxes_t_tensor).to(device)
+
+                self._ism.ref_data = {}
+                self._ism.ref_data["descriptors"] = self._ism.descriptor_model.compute_features(
+                    templates_proc, token_name="x_norm_clstoken"
+                ).unsqueeze(0).data
+                self._ism.ref_data["appe_descriptors"] = self._ism.descriptor_model.compute_masked_patch_feature(
+                    templates_proc, masks_cropped[:, 0, :, :]
+                ).unsqueeze(0).data
+
+                raw_dets = self._ism.segmentor_model.generate_masks(rgb_np)
+                detections_ism = Detections(raw_dets)
+                if len(detections_ism) == 0:
+                    raise RuntimeError("物体が検出されませんでした。")
+
+                query_desc, query_appe_desc = self._ism.descriptor_model.forward(rgb_np, detections_ism)
+                (idx_selected, pred_idx_objects, semantic_score, best_template) = \
+                    self._ism.compute_semantic_score(query_desc)
+                detections_ism.filter(idx_selected)
+                query_appe_desc = query_appe_desc[idx_selected, :]
+
+                appe_scores, ref_aux_descriptor = self._ism.compute_appearance_score(
+                    best_template, pred_idx_objects, query_appe_desc)
+
+                template_poses = get_obj_poses_from_template_level(level=2, pose_distribution="all")
+                template_poses[:, :3, 3] *= 0.4
+                poses = torch.tensor(template_poses).to(torch.float32).to(device)
+                self._ism.ref_data["poses"] = poses[load_index_level_in_level2(0, "all"), :, :]
+
+                mesh_ism = trimesh.load_mesh(cad_path_mm)
+                model_pts_ism = mesh_ism.sample(2048).astype(np.float32) / 1000.0
+                self._ism.ref_data["pointcloud"] = torch.tensor(model_pts_ism).unsqueeze(0).data.to(device)
+
+                cam_K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
+                batch_ism = {
+                    "depth":         torch.from_numpy(depth_mm.astype(np.int32)).unsqueeze(0).to(device),
+                    "cam_intrinsic": torch.from_numpy(cam_K).unsqueeze(0).to(device),
+                    "depth_scale":   torch.tensor(np.array(1.0)).unsqueeze(0).to(device),
+                }
+                image_uv = self._ism.project_template_to_image(
+                    best_template, pred_idx_objects, batch_ism, detections_ism.masks)
+                geometric_score, visible_ratio = self._ism.compute_geometric_score(
+                    image_uv, detections_ism, query_appe_desc, ref_aux_descriptor,
+                    visible_thred=self._ism.visible_thred)
+
+                final_score = (semantic_score + appe_scores + geometric_score * visible_ratio) / (1 + 1 + visible_ratio)
+                detections_ism.add_attribute("scores", final_score)
+                detections_ism.add_attribute("object_ids", torch.zeros_like(final_score))
+                detections_ism.to_numpy()
+
+                sorted_idx = np.argsort(detections_ism.scores)[::-1][:5]
+                masks_ism  = detections_ism.masks[sorted_idx]
+                scores_ism = detections_ism.scores[sorted_idx]
+                print(f"[SAM-6D] ISM 完了: 上位{len(sorted_idx)}件 scores={scores_ism.round(3)}")
+
+                del detections_ism, query_desc, query_appe_desc
+                del semantic_score, appe_scores, geometric_score, visible_ratio, final_score
+                del image_uv, ref_aux_descriptor, best_template, pred_idx_objects, idx_selected
+                del templates_proc, masks_cropped, batch_ism
+                self._ism.ref_data = {}
+                torch.cuda.empty_cache()
+
+                seg_data = []
+                for i in range(len(masks_ism)):
+                    mask  = masks_ism[i]
+                    score = float(scores_ism[i])
+                    mask_u8 = np.asfortranarray(mask.astype(np.uint8))
+                    rle = cocomask.encode(mask_u8)
+                    rle["counts"] = rle["counts"].decode("utf-8")
+                    seg_data.append({
+                        "segmentation": {"size": list(mask.shape), "counts": rle["counts"]},
+                        "score": score,
+                    })
+
             with open(seg_path, "w") as f:
                 json.dump(seg_data, f)
-            print(f"[SAM-6D] SAM マスク生成完了: {len(seg_data)} 個")
-            torch.cuda.empty_cache()  # ISM後のキャッシュ解放
+            torch.cuda.empty_cache()
 
             # Stage 2: テンプレート特徴量取得
             # render_custom_templates.py は output_dir/templates/ に保存する

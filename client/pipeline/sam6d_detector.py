@@ -172,6 +172,8 @@ class SAM6DClient:
         rgb: np.ndarray,
         depth: np.ndarray,
         intrinsics: CameraIntrinsics,
+        click_x: int = -1,
+        click_y: int = -1,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         RGBD + reference mesh からカメラ座標系での物体 6DoF pose を推定する
@@ -213,6 +215,8 @@ class SAM6DClient:
                 "cy":           intrinsics.cy,
                 "mesh_path":    self._server_mesh_path,
                 "template_dir": self._template_dir,
+                "click_x":      click_x,
+                "click_y":      click_y,
             },
             timeout=self.timeout_pose,
         )

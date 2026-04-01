@@ -336,6 +336,8 @@ async def pose_estimate(
     mesh_path: str = Form(...),
     template_dir: str = Form(...),
     det_score_thresh: float = Form(0.2),
+    click_x: int = Form(-1),
+    click_y: int = Form(-1),
 ):
     """
     クライアント互換エンドポイント: 6DoF 姿勢推定
@@ -380,6 +382,8 @@ async def pose_estimate(
             "cad_path":         to_docker_path(mesh_path),
             "template_dir":     to_docker_path(template_dir),
             "det_score_thresh": det_score_thresh,
+            "click_x":          click_x,
+            "click_y":          click_y,
         }, timeout=300.0)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

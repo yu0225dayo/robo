@@ -148,7 +148,8 @@ def run_online(args, config):
 
     # ---- 6DoF pose 推定 ----
     print("\n[Step 1] SAM-6D で 6DoF pose 推定中...")
-    R, t = client.estimate_pose(rgb, depth, intrinsics)
+    R, t = client.estimate_pose(rgb, depth, intrinsics,
+                                click_x=args.click_x, click_y=args.click_y)
     print(f"  R=\n{R}")
     print(f"  t={t}")
 
