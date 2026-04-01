@@ -89,6 +89,8 @@ services:
         --no-show
         --rgb test_data/rgb.png
         --depth test_data/depth.png
+        --depth-scale 0.001
         --mesh meshes/test_object.ply
-        --server-mesh-path /workspace/tmp/server_reconstructions/object_seed42_mesh.ply
-        --template-dir /workspace/tmp/server_reconstructions/object_seed42_mesh_templates
+        --fx 572.4114 --fy 573.57043 --cx 325.2611 --cy 242.04899
+        --server-mesh-path /home/okada/ws/project/tmp/obj_000005.ply
+        --template-dir /home/okada/ws/project/tmp/obj_000005_templates
