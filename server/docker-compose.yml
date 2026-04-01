@@ -79,15 +79,16 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    command: >
-      bash -c "
+    command:
+      - bash
+      - -c
+      - >-
         /opt/conda/envs/sam6d/bin/pip install pyyaml plyfile -q &&
         /opt/conda/envs/sam6d/bin/python test_demo.py
-          --mode online
-          --no-show
-          --rgb test_data/rgb.png
-          --depth test_data/depth.png
-          --mesh meshes/test_object.ply
-          --server-mesh-path /workspace/tmp/server_reconstructions/object_seed42_mesh.ply
-          --template-dir /workspace/tmp/server_reconstructions/object_seed42_mesh_templates
-      "
+        --mode online
+        --no-show
+        --rgb test_data/rgb.png
+        --depth test_data/depth.png
+        --mesh meshes/test_object.ply
+        --server-mesh-path /workspace/tmp/server_reconstructions/object_seed42_mesh.ply
+        --template-dir /workspace/tmp/server_reconstructions/object_seed42_mesh_templates
