@@ -423,71 +423,41 @@ def render_mesh_on_image(
     Returns:
         (H, W, 3) レンダリング結果画像 (BGR)
     """
+    # open3d.visualization.rendering (Filament/EGL) は使わない。
+    # EGL が使えないヘッドレス環境 (Docker 等) で C++ レベルのクラッシュが発生するため。
+    # 代わりにメッシュ面上に均一点をサンプリングして密な点群投影を行う。
+
+    pts = None
     try:
         import open3d as o3d
-        import open3d.visualization.rendering as rendering
-
-        h, w = bgr.shape[:2]
-
-        mesh = o3d.io.read_triangle_mesh(mesh_path)
-        if len(mesh.triangles) == 0:
-            raise RuntimeError("メッシュに面がありません")
-
-        mesh.compute_vertex_normals()
-        if mesh_unit == "mm":
-            mesh.scale(0.001, center=np.array([0.0, 0.0, 0.0]))
-
-        T_obj2cam = np.eye(4, dtype=np.float64)
-        T_obj2cam[:3, :3] = R.astype(np.float64)
-        T_obj2cam[:3, 3]  = t.astype(np.float64)
-        mesh.transform(T_obj2cam)
-
-        renderer = rendering.OffscreenRenderer(w, h)
-        renderer.scene.set_background([0.0, 0.0, 0.0, 0.0])
-
-        mat = rendering.MaterialRecord()
-        mat.shader = "defaultLit"
-        mat.base_color = [mesh_color[0], mesh_color[1], mesh_color[2], 1.0]
-        renderer.scene.add_geometry("mesh", mesh, mat)
-
-        renderer.scene.scene.set_sun_light(
-            [0.577, -0.577, -0.577], [1.0, 1.0, 1.0], 75000
-        )
-        renderer.scene.scene.enable_sun_light(True)
-        renderer.setup_camera(
-            intrinsics.fx, intrinsics.fy,
-            intrinsics.cx, intrinsics.cy,
-            w, h,
-        )
-
-        rendered = renderer.render_to_image()
-        rendered_bgr = _cv2.cvtColor(np.asarray(rendered)[:, :, :3], _cv2.COLOR_RGB2BGR)
-
-        mask = rendered_bgr.sum(axis=2) > 0
-        result = bgr.copy()
-        result[mask] = (
-            alpha * rendered_bgr[mask].astype(np.float32)
-            + (1 - alpha) * bgr[mask].astype(np.float32)
-        ).astype(np.uint8)
-        return result
-
+        mesh_o3d = o3d.io.read_triangle_mesh(mesh_path)
+        if len(mesh_o3d.triangles) > 0:
+            # メッシュ面上に均一に 10000 点をサンプリング (頂点のみより高密度かつ均一)
+            pcd = mesh_o3d.sample_points_uniformly(number_of_points=10000)
+            pts = np.asarray(pcd.points).astype(np.float32)
+            print(f"[render_mesh] 面サンプリング: {len(pts)} 点")
+        else:
+            pts = np.asarray(mesh_o3d.vertices).astype(np.float32)
+            print(f"[render_mesh] 頂点投影: {len(pts)} 点 (面なし)")
     except Exception as e:
-        # EGL初期化失敗・open3d未インストール・面なしメッシュなどのフォールバック
-        print(f"[render_mesh] レンダラー初期化失敗 ({e}). 密点群投影にフォールバック")
+        print(f"[render_mesh] open3d でのメッシュ読み込み失敗 ({e}). 頂点投影にフォールバック")
+        try:
+            import open3d as o3d
+            pcd = o3d.io.read_point_cloud(mesh_path)
+            pts = np.asarray(pcd.points).astype(np.float32)
+        except Exception:
+            from utils.pointcloud_utils import load_pointcloud_ply
+            pts = load_pointcloud_ply(mesh_path)
 
-    # フォールバック: メッシュ頂点を全点使って密に投影 (ダウンサンプリングなし)
-    try:
-        import open3d as o3d
-        mesh_fb = o3d.io.read_triangle_mesh(mesh_path)
-        pts = np.asarray(mesh_fb.vertices).astype(np.float32)
-    except Exception:
-        from utils.pointcloud_utils import load_pointcloud_ply
-        pts = load_pointcloud_ply(mesh_path)
-
+    point_color_bgr = (
+        int(mesh_color[2] * 255),
+        int(mesh_color[1] * 255),
+        int(mesh_color[0] * 255),
+    )
     return project_pointcloud_on_image(
         bgr, pts, R, t, intrinsics,
-        point_color=(0, 220, 0),
+        point_color=point_color_bgr,
         bbox_color=(0, 220, 220),
-        point_size=2,
+        point_size=1,
         points_unit=mesh_unit,
     )
