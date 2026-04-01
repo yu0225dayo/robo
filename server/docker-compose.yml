@@ -52,3 +52,42 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s   # モデルロードに時間がかかるため
+
+  # client-test: test_demo.py をヘッドレスで実行して可視化結果を確認するサービス
+  # 使い方:
+  #   docker compose run --rm client-test
+  #   # 出力画像: /home/okada/ws/project/client/output/test/pose_check_mesh.png
+  client-test:
+    image: sam6d-service:latest   # sam6d と同じイメージを流用
+    profiles:
+      - test   # docker compose run client-test で明示的に起動 (up -d では起動しない)
+    volumes:
+      # クライアントコード (test_demo.py, utils/, pipeline/ など)
+      - /home/okada/ws/project/client:/client
+      # テンプレート・メッシュなどの共有tmpディレクトリ
+      - /home/okada/ws/project/tmp:/workspace/tmp
+    working_dir: /client
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYOPENGL_PLATFORM=egl   # Open3D OffscreenRenderer のヘッドレスレンダリング
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # ホストの port 8080 (SAM-3D) に接続するため
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: >
+      bash -c "
+        /opt/conda/envs/sam6d/bin/pip install pyyaml plyfile -q &&
+        /opt/conda/envs/sam6d/bin/python test_demo.py
+          --mode online
+          --no-show
+          --rgb test_data/rgb.png
+          --depth test_data/depth.png
+          --mesh meshes/test_object.ply
+          --server-mesh-path /workspace/tmp/server_reconstructions/object_seed42_mesh.ply
+          --template-dir /workspace/tmp/server_reconstructions/object_seed42_mesh_templates
+      "

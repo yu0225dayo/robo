@@ -169,10 +169,13 @@ def run_online(args, config):
     cv2.imwrite(vis_pts_path, vis_pts_img)
     print(f"[Pose確認] 点群+bbox投影画像を保存: {vis_pts_path}")
 
-    cv2.imshow("Pose Check: mesh render", vis_img)
-    cv2.imshow("Pose Check: pointcloud + bbox", vis_pts_img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    if not args.no_show:
+        cv2.imshow("Pose Check: mesh render", vis_img)
+        cv2.imshow("Pose Check: pointcloud + bbox", vis_pts_img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    else:
+        print("[表示スキップ] --no-show が指定されています。画像はファイルに保存されました。")
 
     # ---- スケール推定 ----
     mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
@@ -205,16 +208,19 @@ def run_online(args, config):
         print(f"  保存: {save_path}")
 
     # 最初の結果を表示
-    cv2.imshow("Grasp Result", cv2.imread("output/test/grasp_00.png"))
-    print("\n何かキーを押すと終了...")
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    if not args.no_show:
+        cv2.imshow("Grasp Result", cv2.imread("output/test/grasp_00.png"))
+        print("\n何かキーを押すと終了...")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
 
 def main():
     parser = argparse.ArgumentParser(description="デモデータでパイプラインをテスト")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--mode", choices=["offline-mesh", "online"], default="online")
+    parser.add_argument("--no-show", action="store_true",
+                        help="cv2.imshow を使わない (Docker/ヘッドレス環境用)")
 
     # 入力データ
     parser.add_argument("--rgb",   required=True,  help="RGB 画像パス (.png/.jpg)")
