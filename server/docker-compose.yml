@@ -83,10 +83,11 @@ services:
       - bash
       - -c
       - >-
-        /opt/conda/envs/sam6d/bin/pip install pyyaml plyfile -q &&
+        /opt/conda/envs/sam6d/bin/pip install pyyaml plyfile open3d -q &&
         /opt/conda/envs/sam6d/bin/python test_demo.py
         --mode online
         --no-show
+        --skip-grasp
         --rgb test_data/rgb.png
         --depth test_data/depth.png
         --depth-scale 0.001

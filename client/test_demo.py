@@ -177,6 +177,12 @@ def run_online(args, config):
     else:
         print("[表示スキップ] --no-show が指定されています。画像はファイルに保存されました。")
 
+    if args.skip_grasp:
+        print("\n[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")
+        print(f"  出力: {vis_path}")
+        print(f"  出力: {vis_pts_path}")
+        return
+
     # ---- スケール推定 ----
     mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
     mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
@@ -221,6 +227,8 @@ def main():
     parser.add_argument("--mode", choices=["offline-mesh", "online"], default="online")
     parser.add_argument("--no-show", action="store_true",
                         help="cv2.imshow を使わない (Docker/ヘッドレス環境用)")
+    parser.add_argument("--skip-grasp", action="store_true",
+                        help="Shape2Gesture をスキップして pose 可視化のみ実行")
 
     # 入力データ
     parser.add_argument("--rgb",   required=True,  help="RGB 画像パス (.png/.jpg)")
