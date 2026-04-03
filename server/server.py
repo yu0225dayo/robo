@@ -220,6 +220,7 @@ async def reconstruct_mesh(
     seed: int = Form(42),
     target_points: int = Form(2048),
     output_dir: str = Form(""),
+    mesh_method: str = Form("bpa"),  # "bpa" or "poisson"
 ):
     """
     クライアント互換エンドポイント: SAM-3D でメッシュ生成 + SAM-6D テンプレートレンダリング
@@ -246,6 +247,9 @@ async def reconstruct_mesh(
     prompt_point = np.array([[click_x if click_x >= 0 else w // 2,
                                click_y if click_y >= 0 else h // 2]])
 
+    import time
+    t0 = time.time()
+
     sam_predictor.set_image(rgb)
     masks, scores, _ = sam_predictor.predict(
         point_coords=prompt_point,
@@ -253,34 +257,96 @@ async def reconstruct_mesh(
         multimask_output=True,
     )
     best_mask = masks[np.argmax(scores)]
-    print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px)")
+    t_sam = time.time()
+    print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px) [{t_sam - t0:.1f}s]")
 
     # SAM-3D をロード → 推論 → 即削除してGPUを解放
     output = _load_sam3d_and_run(rgb, best_mask, seed)
+    t_sam3d = time.time()
+    print(f"[Server] SAM-3D 推論完了 [{t_sam3d - t_sam:.1f}s]")
 
     # 共有tmpに保存してDockerからアクセスできるようにする
     save_dir = output_dir if output_dir else os.path.join(_host_tmp, "server_reconstructions")
     os.makedirs(save_dir, exist_ok=True)
     ply_path = os.path.join(save_dir, f"object_seed{seed}.ply")
-    output["gs"].save_ply(ply_path)
-    print(f"[Server] PLY 保存: {ply_path}")
-
-    # 点群 → メッシュ変換 (SAM-6D は面付きメッシュを必要とする)
+    # GS点群をPLYに保存
     import open3d as o3d
-    print("[Server] 点群をメッシュに変換中 (Poisson reconstruction)...")
-    gs_ply = o3d.io.read_point_cloud(ply_path)
+    output["gs"].save_ply(ply_path)
+    print(f"[Server] GS PLY 保存: {ply_path}")
 
-    # ダウンサンプリングで点数を削減
-    gs_ply = gs_ply.voxel_down_sample(voxel_size=0.005)
-    print(f"[Server] ダウンサンプル後: {len(gs_ply.points)} points")
+    # 点群 → メッシュ変換
+    print("[Server] 点群をメッシュに変換中 (BPA)...")
+    t_bpa_start = time.time()
+    gs_ply = o3d.io.read_point_cloud(ply_path)
+    n_pts = len(gs_ply.points)
+    print(f"[Server] 元の点数: {n_pts}")
+
+    # 全点群を保存
+    pcd_full_path = ply_path.replace(".ply", "_pcd_full.ply")
+    o3d.io.write_point_cloud(pcd_full_path, gs_ply)
+    print(f"[Server] 全点群保存: {pcd_full_path}")
+
+    # 10000点にダウンサンプリング
+    if n_pts > 10000:
+        gs_ply = gs_ply.random_down_sample(10000 / n_pts)
+    pcd_path = ply_path.replace(".ply", "_pcd.ply")
+    o3d.io.write_point_cloud(pcd_path, gs_ply)
+    print(f"[Server] ダウンサンプル後: {len(gs_ply.points)} points → {pcd_path}")
 
     gs_ply.estimate_normals()
-    mesh_o3d, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(gs_ply, depth=8)
+    gs_ply.orient_normals_consistent_tangent_plane(k=15)
 
-    # メッシュ簡略化 (三角形数を上限10000に)
-    mesh_o3d = mesh_o3d.simplify_quadric_decimation(10000)
-    mesh_o3d.remove_degenerate_triangles()
-    mesh_o3d.remove_unreferenced_vertices()
+    print(f"[Server] メッシュ生成方法: {mesh_method}")
+    if mesh_method == "knn":
+        from sklearn.neighbors import NearestNeighbors
+        k = 10
+        pts = np.asarray(gs_ply.points)
+        normals = np.asarray(gs_ply.normals)
+        print(f"[Server] KNN メッシュ構築 (k={k}, points={len(pts)})...")
+        nbrs = NearestNeighbors(n_neighbors=k + 1).fit(pts)
+        _, indices = nbrs.kneighbors(pts)
+        faces_set = set()
+        for i, neighbors in enumerate(indices):
+            nn = neighbors[1:]
+            for j in range(len(nn)):
+                for k_idx in range(j + 1, len(nn)):
+                    face = tuple(sorted([i, nn[j], nn[k_idx]]))
+                    faces_set.add(face)
+        faces = list(faces_set)
+        print(f"[Server] KNN 三角形数: {len(faces)}")
+        mesh_o3d = o3d.geometry.TriangleMesh()
+        mesh_o3d.vertices = o3d.utility.Vector3dVector(pts)
+        mesh_o3d.triangles = o3d.utility.Vector3iVector(np.array(faces, dtype=np.int32))
+        mesh_o3d.vertex_normals = o3d.utility.Vector3dVector(normals)
+        mesh_o3d.remove_degenerate_triangles()
+        mesh_o3d.remove_unreferenced_vertices()
+        t_mesh_end = time.time()
+        print(f"[Server] KNN 完了 [{t_mesh_end - t_bpa_start:.1f}s]")
+    elif mesh_method == "poisson":
+        mesh_o3d, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+            gs_ply, depth=8
+        )
+        # 密度の低い頂点 (外れ値) を除去
+        density_thresh = np.quantile(np.asarray(densities), 0.1)
+        mesh_o3d = mesh_o3d.select_by_index(
+            np.where(np.asarray(densities) >= density_thresh)[0]
+        )
+        mesh_o3d.remove_degenerate_triangles()
+        mesh_o3d.remove_unreferenced_vertices()
+        t_mesh_end = time.time()
+        print(f"[Server] Poisson 完了 [{t_mesh_end - t_bpa_start:.1f}s]")
+    else:
+        # BPA
+        bbox = gs_ply.get_axis_aligned_bounding_box()
+        r = max(bbox.get_extent()) * 0.2
+        radii = [r, r * 2]
+        mesh_o3d = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
+            gs_ply, o3d.utility.DoubleVector(radii)
+        )
+        mesh_o3d.remove_degenerate_triangles()
+        mesh_o3d.remove_unreferenced_vertices()
+        t_mesh_end = time.time()
+        print(f"[Server] BPA 完了 [{t_mesh_end - t_bpa_start:.1f}s]")
 
     # SAM-3D はmm単位ではなく正規化座標で出力するため、mm単位にスケール変換
     # SAM-6D の get_test_data は /1000 して mm→m を仮定している
@@ -293,7 +359,8 @@ async def reconstruct_mesh(
 
     mesh_path = ply_path.replace(".ply", "_mesh.ply")
     o3d.io.write_triangle_mesh(mesh_path, mesh_o3d)
-    print(f"[Server] メッシュ保存: {mesh_path} ({len(mesh_o3d.triangles)} triangles)")
+    t_mesh = time.time()
+    print(f"[Server] メッシュ保存: {mesh_path} ({len(mesh_o3d.triangles)} triangles) [合計: {t_mesh - t0:.1f}s]")
 
     ys, xs = np.where(best_mask)
     mask_center_u = int(xs.mean())

@@ -36,7 +36,7 @@ class SAM6DClient:
     def __init__(
         self,
         server_url: str = "http://localhost:8080",
-        timeout_mesh: float = 120.0,
+        timeout_mesh: float = 300.0,
         timeout_pose: float = 30.0,
     ):
         self.server_url = server_url.rstrip("/")
@@ -57,6 +57,7 @@ class SAM6DClient:
         click_x: int = -1,
         click_y: int = -1,
         seed: int = 42,
+        mesh_method: str = "bpa",
     ) -> str:
         """
         RGB画像をサーバに送り、SAM-3D で生成した reference mesh を保存する
@@ -80,7 +81,7 @@ class SAM6DClient:
         resp = requests.post(
             f"{self.server_url}/reconstruct_mesh",
             files={"image": ("frame.jpg", image_bytes, "image/jpeg")},
-            data={"click_x": click_x, "click_y": click_y, "seed": seed},
+            data={"click_x": click_x, "click_y": click_y, "seed": seed, "mesh_method": mesh_method},
             timeout=self.timeout_mesh,
         )
 

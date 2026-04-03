@@ -75,13 +75,15 @@ def run_offline_mesh(args, config):
     print(f"[test] RGB ロード: {args.rgb}  shape={rgb.shape}")
 
     mesh_path = args.mesh_out
+    mesh_method = sam_cfg.get("mesh_method", "bpa")
     if args.click_x >= 0 and args.click_y >= 0:
         client.save_reference_mesh(rgb, mesh_path,
-                                   click_x=args.click_x, click_y=args.click_y)
+                                   click_x=args.click_x, click_y=args.click_y,
+                                   mesh_method=mesh_method)
     elif args.interactive:
         client.save_reference_mesh_interactive(rgb, mesh_path)
     else:
-        client.save_reference_mesh(rgb, mesh_path)
+        client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
 
     print(f"\n[完了] mesh: {mesh_path}")
     print(f"       サーバ mesh: {client._server_mesh_path}")

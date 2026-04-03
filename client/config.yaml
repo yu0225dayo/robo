@@ -19,7 +19,8 @@ sam3d:
   server_url: "http://10.40.1.126:8080"
   target_points: 2048                           # 受け取る点群の点数
   interactive: true                             # true: クリックで物体選択 / false: 画像中央を使用
-  timeout: 120.0                                # タイムアウト秒数 (3D生成は数十秒かかる)
+  timeout: 6000.0                                # タイムアウト秒数 (3D生成は数十秒かかる)
+  mesh_method: "knn"                                # メッシュ生成方法: "bpa" / "poisson" / "knn"
 
 # ===========================
 # SAM-6D 設定
