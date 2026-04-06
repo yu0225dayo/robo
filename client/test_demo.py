@@ -47,7 +47,7 @@ def load_intrinsics(args, img_w: int, img_h: int):
     {"cam_K": [fx,0,cx, 0,fy,cy, 0,0,1], "depth_scale": 1.0} 形式を想定。
     """
     import json as _json
-
+    from utils.coord_transform import CameraIntrinsics
 
     if args.cam_json:
         with open(args.cam_json, "r") as f:
@@ -131,9 +131,6 @@ def run_offline_mesh(args, config):
 
 def run_full(args, config):
     """RGB + 深度ファイル → メッシュ生成 → SAM-6D pose → 可視化 (1コマンド実行)"""
-    import subprocess
-    import json as json_module
-    import shutil
     from pipeline.sam6d_detector import SAM6DClient
     from pipeline.grasp_generator import GraspGenerator
     from utils.coord_transform import (
@@ -187,105 +184,14 @@ def run_full(args, config):
     # ---- カメラ内部パラメータ ----
     intrinsics = load_intrinsics(args, w, h)
 
-    # ---- Step 2: docker exec で run_demo_custom.sh を実行 ----
-    print("\n[Step 2] SAM-6D で 6DoF pose 推定中 (run_demo_custom.sh)...")
-
-    TMP_HOST   = "/home/okada/ws/project/tmp"
-    TMP_DOCKER = "/workspace/tmp"
-
-    # RGB / Depth を共有ディレクトリに保存
-    rgb_host   = os.path.join(TMP_HOST, "rgb.png")
-    depth_host = os.path.join(TMP_HOST, "depth.png")
-    cam_host   = os.path.join(TMP_HOST, "camera_custom.json")
-
-    cv2.imwrite(rgb_host, rgb)  # BGR のまま保存
-    depth_mm = (depth * 1000.0).astype(np.uint16)
-    cv2.imwrite(depth_host, depth_mm)
-
-    # カメラ JSON 生成 (depth_scale=1.0: uint16mm → /1000 = m)
-    cam_json = {
-        "cam_K": [
-            intrinsics.fx, 0.0, intrinsics.cx,
-            0.0, intrinsics.fy, intrinsics.cy,
-            0.0, 0.0, 1.0,
-        ],
-        "depth_scale": 1.0,
-    }
-    with open(cam_host, "w") as f:
-        json_module.dump(cam_json, f)
-
-    # Docker パス
-    rgb_docker   = f"{TMP_DOCKER}/rgb.png"
-    depth_docker = f"{TMP_DOCKER}/depth.png"
-    cam_docker   = f"{TMP_DOCKER}/camera_custom.json"
-
-    # template_dir (Docker) → output_dir (Docker)
-    # _template_dir = ".../object_seed42_mesh_templates/templates"
-    # output_dir    = ".../object_seed42_mesh_templates"
-    template_dir_docker = client._template_dir.rstrip("/")
-    if template_dir_docker.endswith("/templates"):
-        output_dir_docker = template_dir_docker[: -len("/templates")]
-    else:
-        output_dir_docker = template_dir_docker
-
-    mesh_docker    = client._server_mesh_path
-    script_docker  = "/workspace/SAM-6D/SAM-6D/run_demo_custom.sh"
-
-    cmd = [
-        "docker", "exec", "sam6d_service",
-        "bash", script_docker,
-        mesh_docker,
-        output_dir_docker,
-        str(args.click_x),
-        str(args.click_y),
-        rgb_docker,
-        depth_docker,
-        cam_docker,
-    ]
-    print(f"[Step 2] 実行: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        raise RuntimeError(f"run_demo_custom.sh 失敗 (code={result.returncode})")
-
-    # ---- 結果 JSON 読み込み ----
-    output_dir_host  = output_dir_docker.replace(TMP_DOCKER, TMP_HOST)
-    result_json_path = os.path.join(output_dir_host, "sam6d_results", "detection_pem.json")
-    with open(result_json_path, "r") as f:
-        detections = json_module.load(f)
-
-    if not detections:
-        raise RuntimeError("pose 推定失敗: detection が空です")
-
-    best = max(detections, key=lambda d: d["score"])
-    R = np.array(best["R"], dtype=np.float32)        # (3, 3)
-    t = np.array(best["t"], dtype=np.float32) / 1000.0  # mm → m
+    # ---- Step 2: 6DoF pose 推定 (server.py 経由) ----
+    print("\n[Step 2] SAM-6D で 6DoF pose 推定中...")
+    R, t = client.estimate_pose(rgb, depth, intrinsics,
+                                click_x=args.click_x, click_y=args.click_y)
     print(f"[Step 2完了] t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
     print(f"  R=\n{R}")
 
-    # ---- 可視化画像を output/test/ にコピー ----
     os.makedirs("output/test", exist_ok=True)
-    vis_pem  = os.path.join(output_dir_host, "sam6d_results", "vis_pem.png")
-    vis_axes = os.path.join(output_dir_host, "sam6d_results", "vis_pem_axes.png")
-
-    out_pem  = "output/test/pose_check.png"
-    out_axes = "output/test/pose_check_axes.png"
-
-    if os.path.exists(vis_pem):
-        shutil.copy(vis_pem, out_pem)
-        print(f"[Pose確認] 可視化画像を保存: {out_pem}")
-    if os.path.exists(vis_axes):
-        shutil.copy(vis_axes, out_axes)
-        print(f"[Pose確認] 軸付き可視化画像を保存: {out_axes}")
-
-    if not args.no_show:
-        for path, title in [(out_pem, "Pose Check"), (out_axes, "Pose Check (axes)")]:
-            img = cv2.imread(path)
-            if img is not None:
-                cv2.imshow(title, img)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-    else:
-        print("[表示スキップ] --no-show が指定されています。画像はファイルに保存されました。")
 
     if args.skip_grasp:
         print("\n[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")

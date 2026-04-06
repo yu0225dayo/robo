@@ -412,6 +412,8 @@ async def pose_estimate(
 
     depth_image: float32 生バイト列 (H×W×4 bytes, メートル単位)
     """
+    import subprocess
+
     rgb_bytes   = await rgb_image.read()
     depth_bytes = await depth_image.read()
 
@@ -422,45 +424,68 @@ async def pose_estimate(
         raise HTTPException(400, "RGB画像のデコードに失敗しました")
     h, w = bgr.shape[:2]
 
-    # depth: float32 生バイト → uint16 PNG [mm]
+    # depth: float32 生バイト → uint16 mm
     depth_f32 = np.frombuffer(depth_bytes, dtype=np.float32).reshape(h, w)
     depth_mm  = (depth_f32 * 1000.0).astype(np.uint16)
 
-    import tempfile, shutil
-    tmpdir = tempfile.mkdtemp(dir=_host_tmp)
-    try:
-        rgb_path   = os.path.join(tmpdir, "rgb.png")
-        depth_path = os.path.join(tmpdir, "depth.png")
-        cam_path   = os.path.join(tmpdir, "camera.json")
+    # 共有 tmp ディレクトリに保存 (Docker から /workspace/tmp/ として見える)
+    rgb_host   = os.path.join(_host_tmp, "rgb.png")
+    depth_host = os.path.join(_host_tmp, "depth.png")
+    cam_host   = os.path.join(_host_tmp, "camera_custom.json")
 
-        cv2.imwrite(rgb_path, bgr)
-        cv2.imwrite(depth_path, depth_mm)
+    cv2.imwrite(rgb_host, bgr)
+    cv2.imwrite(depth_host, depth_mm)
+    cam_json_data = {
+        "cam_K": [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0],
+        "depth_scale": 1.0,
+    }
+    with open(cam_host, "w") as f:
+        json.dump(cam_json_data, f)
 
-        cam_json = {
-            "cam_K": [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0],
-            "depth_scale": 1.0,
-        }
-        with open(cam_path, "w") as f:
-            json.dump(cam_json, f)
+    # Docker パス
+    rgb_docker   = f"{_docker_tmp}/rgb.png"
+    depth_docker = f"{_docker_tmp}/depth.png"
+    cam_docker   = f"{_docker_tmp}/camera_custom.json"
 
-        result = _sam6d_post("estimate_pose", {
-            "rgb_path":         to_docker_path(rgb_path),
-            "depth_path":       to_docker_path(depth_path),
-            "cam_json_path":    to_docker_path(cam_path),
-            "cad_path":         to_docker_path(mesh_path),
-            "template_dir":     to_docker_path(template_dir),
-            "det_score_thresh": det_score_thresh,
-            "click_x":          click_x,
-            "click_y":          click_y,
-        }, timeout=300.0)
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+    # template_dir (Docker path) → output_dir (テンプレートの親ディレクトリ)
+    tdir = template_dir.rstrip("/")
+    output_dir_docker = tdir[:-len("/templates")] if tdir.endswith("/templates") else tdir
+
+    script_docker = "/workspace/SAM-6D/SAM-6D/run_demo_custom.sh"
+    cmd = [
+        "docker", "exec", "sam6d_service",
+        "bash", script_docker,
+        mesh_path,          # already Docker path
+        output_dir_docker,
+        str(click_x),
+        str(click_y),
+        rgb_docker,
+        depth_docker,
+        cam_docker,
+    ]
+    print(f"[pose_estimate] {' '.join(cmd)}")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise HTTPException(500, f"run_demo_custom.sh 失敗:\n{proc.stderr[-2000:]}")
+
+    # 結果 JSON 読み込み
+    output_dir_host  = output_dir_docker.replace(_docker_tmp, _host_tmp)
+    result_json_path = os.path.join(output_dir_host, "sam6d_results", "detection_pem.json")
+    with open(result_json_path, "r") as f:
+        detections = json.load(f)
+
+    if not detections:
+        raise HTTPException(500, "pose 推定失敗: detection が空です")
+
+    best  = max(detections, key=lambda d: d["score"])
+    R     = best["R"]                               # 3×3 list
+    t_m   = [v / 1000.0 for v in best["t"]]        # mm → m
 
     return JSONResponse({
-        "success": True,
-        "R": result["R"],
-        "t": result["t"],
-        "mask_area": result.get("mask_area", 0),
+        "success":   True,
+        "R":         R,
+        "t":         t_m,
+        "mask_area": 0,
     })
 
 

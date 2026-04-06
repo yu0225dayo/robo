@@ -1,0 +1,14 @@
+止めました。コンテナを起動してデモを実行します：
+
+
+docker start sam6d_service
+docker exec -it sam6d_service bash
+
+# コンテナ内で
+source /opt/conda/etc/profile.d/conda.sh
+conda activate sam6d
+bash /workspace/SAM-6D/SAM-6D/run_demo_custom.sh
+実行後にサービスを戻すには：
+
+
+docker restart sam6d_service
