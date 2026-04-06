@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1
 
 # FastAPI サービスに必要なパッケージを sam6d conda 環境に追加インストール
 RUN /opt/conda/envs/sam6d/bin/pip install --no-cache-dir \
-    fastapi "uvicorn[standard]" httpx python-multipart
+    fastapi "uvicorn[standard]" httpx python-multipart open3d
 
 WORKDIR /service
 

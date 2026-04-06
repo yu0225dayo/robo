@@ -366,12 +366,13 @@ async def reconstruct_mesh(
     mask_center_u = int(xs.mean())
     mask_center_v = int(ys.mean())
 
-    # SAM-6D テンプレートレンダリング (Dockerコンテナ内パスで渡す)
-    print("[Server] SAM-6D テンプレートレンダリング中...")
+    # SAM-6D テンプレートレンダリング (点群直接投影, Blenderproc不要)
+    print("[Server] SAM-6D テンプレートレンダリング中 (点群直接投影)...")
     tdir_resp = _sam6d_post("render_templates", {
         "cad_path": to_docker_path(mesh_path),
         "output_dir": None,
         "num_templates": 42,
+        "pcd_path": to_docker_path(pcd_full_path),
     }, timeout=600.0)
     template_dir = tdir_resp["template_dir"]
     print(f"[Server] テンプレート完了: {template_dir}")

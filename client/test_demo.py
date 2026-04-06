@@ -97,6 +97,136 @@ def run_offline_mesh(args, config):
     print(f"    --template-dir \"{client._template_dir}\"")
 
 
+def run_full(args, config):
+    """RGB + 深度ファイル → メッシュ生成 → SAM-6D pose → 可視化 (1コマンド実行)"""
+    from pipeline.sam6d_detector import SAM6DClient
+    from pipeline.grasp_generator import GraspGenerator
+    from utils.coord_transform import (
+        CameraIntrinsics, ObjectPose,
+        estimate_scale_from_depth, normalized_to_camera,
+    )
+    from utils.visualization import project_hands_on_image, project_pointcloud_on_image, render_mesh_on_image
+    from utils.pointcloud_utils import load_pointcloud_ply
+
+    sam_cfg  = config["sam3d"]
+    sam6d_cfg = config.get("sam6d", {})
+    model_cfg = config["grasp_model"]
+
+    # ---- RGB ロード ----
+    rgb = cv2.imread(args.rgb)
+    if rgb is None:
+        raise FileNotFoundError(f"RGB 画像が読み込めません: {args.rgb}")
+    print(f"[test] RGB ロード: {args.rgb}  shape={rgb.shape}")
+
+    # ---- Step 1: メッシュ生成 ----
+    client = SAM6DClient(
+        server_url=sam_cfg["server_url"],
+        timeout_mesh=sam_cfg.get("timeout", 300.0),
+        timeout_pose=sam6d_cfg.get("timeout", 30.0),
+    )
+
+    mesh_path = args.mesh_out
+    mesh_method = sam_cfg.get("mesh_method", "bpa")
+    print("\n[Step 1] SAM-3D でメッシュ生成中...")
+    if args.click_x >= 0 and args.click_y >= 0:
+        client.save_reference_mesh(rgb, mesh_path,
+                                   click_x=args.click_x, click_y=args.click_y,
+                                   mesh_method=mesh_method)
+    elif args.interactive:
+        client.save_reference_mesh_interactive(rgb, mesh_path)
+    else:
+        client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
+
+    print(f"[Step 1完了] mesh: {mesh_path}")
+    print(f"             サーバ mesh: {client._server_mesh_path}")
+    print(f"             テンプレート: {client._template_dir}")
+
+    # ---- 深度ロード ----
+    depth = load_depth(args.depth, depth_scale=args.depth_scale)
+    if depth.shape[:2] != rgb.shape[:2]:
+        depth = cv2.resize(depth, (rgb.shape[1], rgb.shape[0]),
+                           interpolation=cv2.INTER_NEAREST)
+
+    h, w = rgb.shape[:2]
+
+    # ---- カメラ内部パラメータ ----
+    intrinsics = CameraIntrinsics(
+        fx=args.fx, fy=args.fy,
+        cx=args.cx if args.cx > 0 else w / 2,
+        cy=args.cy if args.cy > 0 else h / 2,
+        width=w, height=h,
+    )
+
+    # ---- Step 2: 6DoF pose 推定 ----
+    print("\n[Step 2] SAM-6D で 6DoF pose 推定中...")
+    R, t = client.estimate_pose(rgb, depth, intrinsics,
+                                click_x=args.click_x, click_y=args.click_y)
+    print(f"  R=\n{R}")
+    print(f"  t={t}")
+
+    # ---- メッシュをRGB画像にレンダリングして確認 ----
+    mesh_pts = load_pointcloud_ply(mesh_path, target_points=2048)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    os.makedirs("output/test", exist_ok=True)
+
+    vis_img = render_mesh_on_image(bgr, mesh_path, R, t, intrinsics, mesh_unit="mm")
+    vis_path = "output/test/pose_check_mesh.png"
+    cv2.imwrite(vis_path, vis_img)
+    print(f"[Pose確認] メッシュレンダリング画像を保存: {vis_path}")
+
+    vis_pts_img = project_pointcloud_on_image(bgr, mesh_pts, R, t, intrinsics, points_unit="mm")
+    vis_pts_path = "output/test/pose_check_pts.png"
+    cv2.imwrite(vis_pts_path, vis_pts_img)
+    print(f"[Pose確認] 点群+bbox投影画像を保存: {vis_pts_path}")
+
+    if not args.no_show:
+        cv2.imshow("Pose Check: mesh render", vis_img)
+        cv2.imshow("Pose Check: pointcloud + bbox", vis_pts_img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    else:
+        print("[表示スキップ] --no-show が指定されています。画像はファイルに保存されました。")
+
+    if args.skip_grasp:
+        print("\n[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")
+        print(f"  出力: {vis_path}")
+        print(f"  出力: {vis_pts_path}")
+        return
+
+    # ---- スケール推定 ----
+    mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
+    mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
+    scale = estimate_scale_from_depth(depth, mask_u, mask_v, intrinsics, mesh_pts)
+    pose = ObjectPose(center_3d=t, scale=scale, R=R)
+
+    # ---- Shape2Gesture ----
+    print("\n[Step 3] Shape2Gesture で把持姿勢を生成中...")
+    generator = GraspGenerator(
+        model_dir=model_cfg["model_dir"],
+        epoch=model_cfg["epoch"],
+    )
+    generator.load_models()
+
+    grasp_results = generator.generate(mesh_pts, num_samples=model_cfg["num_samples"])
+
+    print(f"\n[Step 4] {len(grasp_results)} 件の把持姿勢を画像に投影中...")
+    for i, (lh_norm, rh_norm) in enumerate(grasp_results):
+        result_img = project_hands_on_image(
+            rgb, lh_norm, rh_norm,
+            object_pose=pose,
+            intrinsics=intrinsics,
+        )
+        save_path = f"output/test/grasp_{i:02d}.png"
+        cv2.imwrite(save_path, result_img)
+        print(f"  保存: {save_path}")
+
+    if not args.no_show:
+        cv2.imshow("Grasp Result", cv2.imread("output/test/grasp_00.png"))
+        print("\n何かキーを押すと終了...")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+
 def run_online(args, config):
     """RGB + 深度ファイル → SAM-6D pose → Shape2Gesture → 画像投影"""
     from pipeline.sam6d_detector import SAM6DClient
@@ -227,7 +357,7 @@ def run_online(args, config):
 def main():
     parser = argparse.ArgumentParser(description="デモデータでパイプラインをテスト")
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--mode", choices=["offline-mesh", "online"], default="online")
+    parser.add_argument("--mode", choices=["offline-mesh", "online", "full"], default="online")
     parser.add_argument("--no-show", action="store_true",
                         help="cv2.imshow を使わない (Docker/ヘッドレス環境用)")
     parser.add_argument("--skip-grasp", action="store_true",
@@ -262,6 +392,11 @@ def main():
 
     if args.mode == "offline-mesh":
         run_offline_mesh(args, config)
+    elif args.mode == "full":
+        if not args.depth:
+            print("エラー: --depth を指定してください。")
+            sys.exit(1)
+        run_full(args, config)
     else:
         if not args.depth:
             print("エラー: --depth を指定してください。")

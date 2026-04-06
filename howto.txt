@@ -1,0 +1,126 @@
+================================================================
+ パイプライン起動手順
+================================================================
+
+【構成】
+  クライアント (ローカルPC)
+    └─ test_demo.py
+          ↓ HTTP :8080
+  サーバ (計算機 10.40.1.126)
+    ├─ server.py          (SAM-3D, ポート 8080)
+    └─ sam6d Docker       (SAM-6D, ポート 8081, server.py が内部呼び出し)
+
+================================================================
+ STEP 1: サーバ側 — SAM-6D Docker を起動
+================================================================
+
+  cd /home/okada/ws/project/server
+  docker compose up -d sam6d
+
+  # 起動確認 (モデルロードに1〜2分かかる)
+  docker logs -f sam6d_service
+
+  # ヘルスチェック
+  curl http://localhost:8081/health
+  # → {"status":"ok","models_loaded":true} が返れば OK
+
+================================================================
+ STEP 2: サーバ側 — server.py を起動
+================================================================
+
+  cd /home/okada/ws/project/server
+  python server.py \
+      --sam-checkpoint ~/ws/sam_vit_h_4b8939.pth \
+      --sam3d-config   ~/ws/sam-3d-objects/checkpoints/hf/pipeline.yaml \
+      --sam3d-repo     ~/ws/sam-3d-objects \
+      --sam6d-service  http://localhost:8081 \
+      --host 0.0.0.0 --port 8080
+
+  # バックグラウンドで実行する場合
+  nohup python server.py \
+      --sam-checkpoint ~/ws/sam_vit_h_4b8939.pth \
+      --sam3d-config   ~/ws/sam-3d-objects/checkpoints/hf/pipeline.yaml \
+      --sam3d-repo     ~/ws/sam-3d-objects \
+      --sam6d-service  http://localhost:8081 \
+      --host 0.0.0.0 --port 8080 \
+      > server.log 2>&1 &
+
+================================================================
+ STEP 3: クライアント側 — 実行
+================================================================
+
+  cd /home/okada/ws/project/client
+
+  # メッシュ生成 + 姿勢推定を一括実行 (推奨)
+  python test_demo.py --mode full \
+      --rgb   test_data/rgb.png \
+      --depth test_data/depth.png \
+      --click-x 400 --click-y 280 \
+      --no-show --skip-grasp
+
+  # 出力画像
+  #   output/test/pose_check_mesh.png  … メッシュレンダリング
+  #   output/test/pose_check_pts.png   … 点群+bbox投影
+
+================================================================
+ オプション説明
+================================================================
+
+  --click-x / --click-y
+      物体を指定するクリック座標。省略すると画面クリックで選択。
+
+  --no-show
+      cv2.imshow を使わない (ヘッドレス環境・SSH環境用)。
+      画像はファイルに保存される。
+
+  --skip-grasp
+      Shape2Gesture による把持姿勢生成をスキップ。
+      姿勢推定の確認だけしたい場合に使う。
+
+  --depth-scale
+      深度画像のスケール係数。
+        0.001 … uint16 mm PNG (デフォルト)
+        1.0   … すでにメートル単位
+
+  --fx / --fy / --cx / --cy
+      カメラ内部パラメータ。config.yaml の値が使われるが上書き可能。
+
+================================================================
+ ステップを分けて実行したい場合
+================================================================
+
+  # Step A: メッシュ生成のみ
+  python test_demo.py --mode offline-mesh \
+      --rgb test_data/rgb.png \
+      --click-x 400 --click-y 280
+
+  # Step B: 姿勢推定のみ (Step A の出力を使う)
+  python test_demo.py --mode online \
+      --rgb   test_data/rgb.png \
+      --depth test_data/depth.png \
+      --mesh  meshes/test_object.ply \
+      --server-mesh-path "/home/okada/ws/project/tmp/server_reconstructions/object_seed42_mesh.ply" \
+      --template-dir     "/home/okada/ws/project/tmp/server_reconstructions/object_seed42_mesh_templates" \
+      --no-show --skip-grasp
+
+================================================================
+ サーバ側パスまとめ
+================================================================
+
+  project/
+  ├─ server/
+  │   ├─ server.py              SAM-3D パイプラインサーバ (ポート 8080)
+  │   ├─ sam6d_service.py       SAM-6D マイクロサービス (ポート 8081, Docker内)
+  │   ├─ sam6d_wrapper.py       SAM-6D ラッパー
+  │   ├─ docker-compose.yml     Docker 設定
+  │   └─ Dockerfile.sam6d       SAM-6D Docker イメージ定義
+  ├─ client/
+  │   ├─ test_demo.py           メインスクリプト
+  │   ├─ config.yaml            設定ファイル (サーバURL等)
+  │   └─ test_data/             テスト用 rgb.png / depth.png
+  └─ tmp/                       サーバ↔Docker 共有テンポラリ
+      └─ server_reconstructions/
+          ├─ object_seed42_mesh.ply
+          └─ object_seed42_mesh_templates/
+
+================================================================

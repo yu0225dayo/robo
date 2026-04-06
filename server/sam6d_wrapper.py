@@ -127,14 +127,19 @@ class SAM6DWrapper:
         cad_path_mm: str,
         output_dir: Optional[str] = None,
         num_templates: int = 42,
+        pcd_path: Optional[str] = None,
     ) -> str:
         """
-        CADモデルから42視点のテンプレートをレンダリングする (物体ごとに一度)
+        テンプレートをレンダリングする (物体ごとに一度)
+
+        pcd_path が指定された場合は点群直接投影 (Blenderproc不要)。
+        指定がなければ従来の Blenderproc + メッシュ方式を使用。
 
         Args:
-            cad_path_mm: CADモデル (.ply) パス [ミリメートル単位]
-            output_dir:  テンプレート保存先 (None で自動生成)
+            cad_path_mm:   メッシュ (.ply) パス [mm単位] (Blenderproc方式で使用)
+            output_dir:    テンプレート保存先 (None で自動生成)
             num_templates: テンプレート数 (デフォルト42)
+            pcd_path:      点群 PLY パス [mm単位] (指定時は点群直接投影を使用)
 
         Returns:
             テンプレートディレクトリのパス
@@ -144,17 +149,33 @@ class SAM6DWrapper:
             output_dir = base + "_templates"
 
         os.makedirs(output_dir, exist_ok=True)
-        render_script = os.path.join(
-            self.sam6d_repo, "SAM-6D", "Render", "render_custom_templates.py"
-        )
-        blenderproc = "/opt/conda/envs/sam6d/bin/blenderproc"
 
-        cmd = [
-            blenderproc, "run", render_script,
-            "--cad_path", cad_path_mm,
-            "--output_dir", output_dir,
-        ]
-        print(f"[SAM-6D] テンプレートレンダリング開始: {cad_path_mm}")
+        if pcd_path is not None:
+            # 点群直接投影方式
+            render_script = os.path.join(
+                self.sam6d_repo, "SAM-6D", "Render", "render_pointcloud_templates.py"
+            )
+            python = "/opt/conda/envs/sam6d/bin/python"
+            cmd = [
+                python, render_script,
+                "--pcd_path", pcd_path,
+                "--output_dir", output_dir,
+                "--num_views", str(num_templates),
+            ]
+            print(f"[SAM-6D] 点群直接投影テンプレート生成: {pcd_path}")
+        else:
+            # 従来の Blenderproc 方式
+            render_script = os.path.join(
+                self.sam6d_repo, "SAM-6D", "Render", "render_custom_templates.py"
+            )
+            blenderproc = "/opt/conda/envs/sam6d/bin/blenderproc"
+            cmd = [
+                blenderproc, "run", render_script,
+                "--cad_path", cad_path_mm,
+                "--output_dir", output_dir,
+            ]
+            print(f"[SAM-6D] Blenderprocテンプレートレンダリング開始: {cad_path_mm}")
+
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(

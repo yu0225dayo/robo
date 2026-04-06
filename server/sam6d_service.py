@@ -38,9 +38,10 @@ _args_global = None
 # ==================== Pydantic スキーマ ====================
 
 class RenderTemplatesRequest(BaseModel):
-    cad_path: str           # 計算機上の PLY パス [mm単位]
+    cad_path: str                    # メッシュ PLY パス [mm単位]
     output_dir: Optional[str] = None
     num_templates: int = 42
+    pcd_path: Optional[str] = None   # 点群 PLY パス (指定時は点群直接投影)
 
 
 class EstimatePoseRequest(BaseModel):
@@ -104,13 +105,18 @@ def render_templates(req: RenderTemplatesRequest):
     if cache_key in _template_cache:
         tdir = _template_cache[cache_key]
         if os.path.isdir(tdir):
-            print(f"[sam6d_service] テンプレートキャッシュ使用: {tdir}")
-            return {"template_dir": tdir}
+            src_mtime = os.path.getmtime(req.cad_path)
+            tpl_mtime = os.path.getmtime(tdir)
+            if src_mtime <= tpl_mtime:
+                print(f"[sam6d_service] テンプレートキャッシュ使用: {tdir}")
+                return {"template_dir": tdir}
+            print(f"[sam6d_service] ソースが更新されたため再生成: {req.cad_path}")
 
     tdir = _wrapper.render_templates(
         cad_path_mm=req.cad_path,
         output_dir=req.output_dir,
         num_templates=req.num_templates,
+        pcd_path=req.pcd_path,
     )
     _template_cache[cache_key] = tdir
     return {"template_dir": tdir}
