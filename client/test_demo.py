@@ -133,7 +133,7 @@ def run_full(args, config):
                                    click_x=args.click_x, click_y=args.click_y,
                                    mesh_method=mesh_method)
     elif args.interactive:
-        client.save_reference_mesh_interactive(rgb, mesh_path)
+        client.save_reference_mesh_interactive(rgb, mesh_path, mesh_method=mesh_method)
     else:
         client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
 

@@ -111,6 +111,7 @@ class SAM6DClient:
         rgb: np.ndarray,
         mesh_save_path: str,
         seed: int = 42,
+        mesh_method: str = "bpa",
     ) -> str:
         """インタラクティブモード: クリックして物体を指定する"""
         clicked = []
@@ -141,7 +142,8 @@ class SAM6DClient:
         cv2.destroyAllWindows()
         cx, cy = clicked[0]
         return self.save_reference_mesh(rgb, mesh_save_path,
-                                        click_x=cx, click_y=cy, seed=seed)
+                                        click_x=cx, click_y=cy, seed=seed,
+                                        mesh_method=mesh_method)
 
     def load_reference_mesh(
         self,
