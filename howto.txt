@@ -30,7 +30,7 @@
 
   cd /home/okada/ws/project/server
   python server.py \
-      --sam-checkpoint ~/ws/sam_vit_h_4b8939.pth \
+      --sam-checkpoint /ws/okada/project/sam_vit_h_4b8939.pth \
       --sam3d-config   ~/ws/sam-3d-objects/checkpoints/hf/pipeline.yaml \
       --sam3d-repo     ~/ws/sam-3d-objects \
       --sam6d-service  http://localhost:8081 \
@@ -38,7 +38,7 @@
 
   # バックグラウンドで実行する場合
   nohup python server.py \
-      --sam-checkpoint ~/ws/sam_vit_h_4b8939.pth \
+      --sam-checkpoint /ws/okada/project/sam_vit_h_4b8939.pth \
       --sam3d-config   ~/ws/sam-3d-objects/checkpoints/hf/pipeline.yaml \
       --sam3d-repo     ~/ws/sam-3d-objects \
       --sam6d-service  http://localhost:8081 \
