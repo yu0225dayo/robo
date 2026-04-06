@@ -455,7 +455,7 @@ async def pose_estimate(
     cmd = [
         "docker", "exec", "sam6d_service",
         "bash", script_docker,
-        mesh_path,          # already Docker path
+        to_docker_path(mesh_path),
         output_dir_docker,
         str(click_x),
         str(click_y),
@@ -478,14 +478,90 @@ async def pose_estimate(
         raise HTTPException(500, "pose 推定失敗: detection が空です")
 
     best  = max(detections, key=lambda d: d["score"])
-    R     = best["R"]                               # 3×3 list
-    t_m   = [v / 1000.0 for v in best["t"]]        # mm → m
+    R_list = best["R"]                               # 3×3 list
+    t_m    = [v / 1000.0 for v in best["t"]]        # mm → m
+
+    # ---- 画像生成 ----
+    import base64
+    import open3d as o3d
+
+    R_np = np.array(R_list, dtype=np.float32)
+    t_np = np.array(t_m, dtype=np.float32)
+
+    class _Intr:
+        def __init__(self): self.fx, self.fy, self.cx, self.cy = fx, fy, cx, cy
+
+    intr = _Intr()
+
+    # 画像1: 点群 + bbox を RGB に投影
+    mesh_host = mesh_path  # host path
+    img1_b64 = ""
+    try:
+        mesh_o3d = o3d.io.read_triangle_mesh(mesh_host)
+        if len(mesh_o3d.triangles) > 0:
+            pcd = mesh_o3d.sample_points_uniformly(number_of_points=5000)
+        else:
+            pcd = o3d.io.read_point_cloud(mesh_host)
+        pts = np.asarray(pcd.points, dtype=np.float32)
+        # メッシュは mm 単位 → m に変換
+        pts_m = pts / 1000.0
+        pts_cam = (R_np @ pts_m.T).T + t_np
+        vis1 = bgr.copy()
+        valid = pts_cam[:, 2] > 0.01
+        us = (fx * pts_cam[valid, 0] / pts_cam[valid, 2] + cx).astype(np.int32)
+        vs = (fy * pts_cam[valid, 1] / pts_cam[valid, 2] + cy).astype(np.int32)
+        in_bounds = (us >= 0) & (us < w) & (vs >= 0) & (vs < h)
+        for u, v in zip(us[in_bounds], vs[in_bounds]):
+            cv2.circle(vis1, (int(u), int(v)), 2, (0, 255, 0), -1)
+        # bbox
+        mins, maxs = pts_m.min(0), pts_m.max(0)
+        corners = np.array([[mins[0],mins[1],mins[2]],[maxs[0],mins[1],mins[2]],
+                             [maxs[0],maxs[1],mins[2]],[mins[0],maxs[1],mins[2]],
+                             [mins[0],mins[1],maxs[2]],[maxs[0],mins[1],maxs[2]],
+                             [maxs[0],maxs[1],maxs[2]],[mins[0],maxs[1],maxs[2]]])
+        cc = (R_np @ corners.T).T + t_np
+        for i, j in [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]:
+            c1, c2 = cc[i], cc[j]
+            if c1[2] > 0.01 and c2[2] > 0.01:
+                u1=int(fx*c1[0]/c1[2]+cx); v1=int(fy*c1[1]/c1[2]+cy)
+                u2=int(fx*c2[0]/c2[2]+cx); v2=int(fy*c2[1]/c2[2]+cy)
+                cv2.line(vis1, (u1,v1), (u2,v2), (0,255,255), 2)
+        _, buf1 = cv2.imencode(".png", vis1)
+        img1_b64 = base64.b64encode(buf1).decode()
+        print("[pose_estimate] 画像1 (点群+bbox) 生成完了")
+    except Exception as e:
+        print(f"[pose_estimate] 画像1 生成失敗: {e}")
+
+    # 画像2: メッシュを面サンプリングして高密度に投影
+    img2_b64 = ""
+    try:
+        mesh_o3d2 = o3d.io.read_triangle_mesh(mesh_host)
+        if len(mesh_o3d2.triangles) > 0:
+            pcd2 = mesh_o3d2.sample_points_uniformly(number_of_points=20000)
+        else:
+            pcd2 = o3d.io.read_point_cloud(mesh_host)
+        pts2 = np.asarray(pcd2.points, dtype=np.float32) / 1000.0
+        pts2_cam = (R_np @ pts2.T).T + t_np
+        vis2 = bgr.copy()
+        valid2 = pts2_cam[:, 2] > 0.01
+        us2 = (fx * pts2_cam[valid2, 0] / pts2_cam[valid2, 2] + cx).astype(np.int32)
+        vs2 = (fy * pts2_cam[valid2, 1] / pts2_cam[valid2, 2] + cy).astype(np.int32)
+        in2 = (us2 >= 0) & (us2 < w) & (vs2 >= 0) & (vs2 < h)
+        for u, v in zip(us2[in2], vs2[in2]):
+            cv2.circle(vis2, (int(u), int(v)), 1, (0, 200, 0), -1)
+        _, buf2 = cv2.imencode(".png", vis2)
+        img2_b64 = base64.b64encode(buf2).decode()
+        print("[pose_estimate] 画像2 (メッシュ面) 生成完了")
+    except Exception as e:
+        print(f"[pose_estimate] 画像2 生成失敗: {e}")
 
     return JSONResponse({
-        "success":   True,
-        "R":         R,
-        "t":         t_m,
-        "mask_area": 0,
+        "success":    True,
+        "R":          R_list,
+        "t":          t_m,
+        "mask_area":  0,
+        "img_pose":   img1_b64,   # 点群+bbox投影
+        "img_mesh":   img2_b64,   # メッシュ面投影
     })
 
 

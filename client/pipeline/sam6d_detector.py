@@ -234,4 +234,19 @@ class SAM6DClient:
         R = np.array(data["R"], dtype=np.float32)  # (3, 3)
         t = np.array(data["t"], dtype=np.float32)  # (3,)
         print(f"[SAM6D] pose 推定完了: t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
+
+        # サーバ生成画像を保存
+        import base64, cv2 as _cv2, os as _os
+        _os.makedirs("output/pose", exist_ok=True)
+        for key, fname in [("img_pose", "output/pose/pose_pointcloud.png"),
+                            ("img_mesh", "output/pose/pose_mesh.png")]:
+            b64 = data.get(key, "")
+            if b64:
+                img = _cv2.imdecode(
+                    np.frombuffer(base64.b64decode(b64), np.uint8),
+                    _cv2.IMREAD_COLOR,
+                )
+                _cv2.imwrite(fname, img)
+                print(f"[SAM6D] 画像保存: {fname}")
+
         return R, t
