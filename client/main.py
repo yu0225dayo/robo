@@ -465,15 +465,24 @@ def run_full(config: dict, args):
                 os.makedirs(out_dir, exist_ok=True)
                 if mask_img is not None:
                     _cv2.imwrite(os.path.join(out_dir, "mask.png"), mask_img)
+                    # マスクサイズが RGB と異なる場合はリサイズ
+                    h_rgb, w_rgb = rgb_frozen.shape[:2]
+                    if mask_img.shape[:2] != (h_rgb, w_rgb):
+                        mask_img = _cv2.resize(
+                            mask_img, (w_rgb, h_rgb), interpolation=_cv2.INTER_NEAREST
+                        )
                     # RGB にマスクオーバーレイ + bbox を描画して保存
                     overlay = rgb_frozen.copy()
                     colored = np.zeros_like(overlay)
                     colored[mask_img > 127] = (0, 255, 0)
                     overlay = _cv2.addWeighted(overlay, 0.7, colored, 0.3, 0)
-                    ys, xs = np.where(mask_img > 127)
-                    if len(xs) > 0:
-                        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
-                        _cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                    # findNonZero + boundingRect で bbox を計算
+                    nz = _cv2.findNonZero(mask_img)
+                    if nz is not None:
+                        x, y, w, h = _cv2.boundingRect(nz)
+                        _cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 255), 2)
+                        print(f"[マスク] bbox=({x},{y},{x+w},{y+h})  "
+                              f"mask={mask_img.shape}  rgb={rgb_frozen.shape[:2]}")
                     _cv2.imwrite(os.path.join(out_dir, "mask_bbox.png"), overlay)
                     _cv2.imshow("mask_bbox", overlay)
                     _cv2.waitKey(1)
