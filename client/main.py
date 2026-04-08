@@ -439,12 +439,14 @@ def run_full(config: dict, args):
                 mesh_pts_norm = normalize_pointcloud(mesh_pts)
                 print(f"[mesh生成完了] {mesh_path}")
 
-                # 3D 点群のみ表示
+                # 3D 点群のみ表示 (ダウンサンプリング)
+                _vis_n = min(512, len(mesh_pts_norm))
+                _vis_idx = np.random.choice(len(mesh_pts_norm), _vis_n, replace=False)
                 ax.cla()
                 ax.set_title("Reference Mesh")
                 ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
                 ax.set_axis_off()
-                ax.scatter(mesh_pts_norm[:, 0], mesh_pts_norm[:, 1], mesh_pts_norm[:, 2],
+                ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                            c="green", s=3)
                 fig.canvas.draw_idle()
                 fig.canvas.flush_events()
@@ -466,12 +468,14 @@ def run_full(config: dict, args):
                     mesh_pts_norm = normalize_pointcloud(mesh_pts)
                     print(f"[mesh生成完了] {mesh_path}")
 
-                    # 3D 点群を表示
+                    # 3D 点群を表示 (ダウンサンプリング)
+                    _vis_n = min(512, len(mesh_pts_norm))
+                    _vis_idx = np.random.choice(len(mesh_pts_norm), _vis_n, replace=False)
                     ax.cla()
                     ax.set_title("Reference Mesh")
                     ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
                     ax.set_axis_off()
-                    ax.scatter(mesh_pts_norm[:, 0], mesh_pts_norm[:, 1], mesh_pts_norm[:, 2],
+                    ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                                c="green", s=3)
                     fig.canvas.draw_idle()
                     fig.canvas.flush_events()
@@ -510,9 +514,14 @@ def run_full(config: dict, args):
                 )
                 norm_pts, seg_labels = generator.get_segmentation(mesh_pts)
                 left_hand_norm, right_hand_norm = grasp_results[0]
+                # ダウンサンプリングして表示
+                _vis_n = min(512, len(norm_pts))
+                _vis_idx = np.random.choice(len(norm_pts), _vis_n, replace=False)
+                _vis_pts = norm_pts[_vis_idx]
+                _vis_labels = seg_labels[_vis_idx] if seg_labels is not None else None
                 live_visualize_update(
-                    fig, ax, norm_pts, left_hand_norm, right_hand_norm,
-                    labels=seg_labels if vis_cfg["show_segmentation"] else None,
+                    fig, ax, _vis_pts, left_hand_norm, right_hand_norm,
+                    labels=_vis_labels if vis_cfg["show_segmentation"] else None,
                 )
 
                 # ---- RGB 画像に把持姿勢を投影 ----
@@ -522,19 +531,6 @@ def run_full(config: dict, args):
                 )
                 _cv2.imwrite(os.path.join(out_dir, "rgb_w_grasp.png"), grasp_img)
                 _cv2.imshow("rgb_w_grasp", grasp_img); _cv2.waitKey(1)
-
-                # ズーム版: 物体中心周辺をクロップして元サイズに拡大
-                h_img, w_img = grasp_img.shape[:2]
-                u_c = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
-                v_c = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
-                r = max(80, int(intrinsics.fx * 0.15 / max(t[2], 0.01) * 2.0))
-                crop = grasp_img[max(0, v_c-r):min(h_img, v_c+r),
-                                 max(0, u_c-r):min(w_img, u_c+r)]
-                if crop.size > 0:
-                    zoom_img = _cv2.resize(crop, (w_img, h_img), interpolation=_cv2.INTER_LINEAR)
-                    _cv2.imwrite(os.path.join(out_dir, "rgb_w_grasp_zoom.png"), zoom_img)
-                    _cv2.imshow("rgb_w_grasp_zoom", zoom_img); _cv2.waitKey(1)
-
                 print(f"[完了] 出力: {out_dir}")
 
                 # ---- ロボットへ送信 ----
