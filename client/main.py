@@ -415,7 +415,7 @@ def run_full(config: dict, args):
         while True:
             rgb, depth, _ = camera.capture()
 
-            status = "[g]で把持生成" if mesh_pts is not None else "[c]で物体選択"
+            status = "[g]で把持生成 / [c]で物体選択" if mesh_pts is not None else "[g]で把持生成（自動でmesh生成）/ [c]で物体選択のみ"
             preview = rgb.copy()
             _cv2.putText(preview, status, (10, 30),
                          _cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -451,9 +451,30 @@ def run_full(config: dict, args):
                 print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
+                # mesh 未生成の場合は自動でメッシュ生成を先に実行
                 if mesh_pts is None or rgb_frozen is None:
-                    print("[警告] 先に [c] で mesh を生成してください。")
-                    continue
+                    print("\n" + "=" * 50)
+                    print("[自動] mesh 未生成: 物体をクリックして選択してください...")
+                    print("=" * 50)
+                    rgb_frozen   = rgb.copy()
+                    depth_frozen = depth.copy()
+                    os.makedirs(os.path.dirname(os.path.abspath(mesh_path)), exist_ok=True)
+                    _, click_x, click_y = client.save_reference_mesh_interactive(
+                        rgb_frozen, mesh_path, mesh_method=mesh_method
+                    )
+                    mesh_pts      = load_pointcloud_ply(mesh_path, target_points=2048)
+                    mesh_pts_norm = normalize_pointcloud(mesh_pts)
+                    print(f"[mesh生成完了] {mesh_path}")
+
+                    # 3D 点群を表示
+                    ax.cla()
+                    ax.set_title("Reference Mesh")
+                    ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
+                    ax.set_axis_off()
+                    ax.scatter(mesh_pts_norm[:, 0], mesh_pts_norm[:, 1], mesh_pts_norm[:, 2],
+                               c="green", s=3)
+                    fig.canvas.draw_idle()
+                    fig.canvas.flush_events()
 
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
@@ -535,7 +556,7 @@ def run_full(config: dict, args):
                 # リセット → 次の物体選択へ
                 rgb_frozen = depth_frozen = None
                 mesh_pts = mesh_pts_norm = None
-                print("\n[完了] 次の物体を選択するには [c] を押してください。")
+                print("\n[完了] 次の把持を行うには [g] を押してください（自動でmesh生成します）。")
 
     except KeyboardInterrupt:
         print("\n[main] 中断されました。")
