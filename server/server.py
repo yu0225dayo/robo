@@ -355,7 +355,10 @@ async def reconstruct_mesh(
     if max_extent > 0:
         scale = 200.0 / max_extent  # 最長辺を200mmに正規化
         mesh_o3d.scale(scale, center=bbox.get_center())
-    print(f"[Server] メッシュスケール変換: {max_extent:.4f} → 200mm")
+    # SAM-6D はモデル原点=物体中心を前提とするため原点に移動
+    center = mesh_o3d.get_axis_aligned_bounding_box().get_center()
+    mesh_o3d.translate(-center)
+    print(f"[Server] メッシュスケール変換: {max_extent:.4f} → 200mm (原点中心化済み)")
 
     mesh_path = ply_path.replace(".ply", "_mesh.ply")
     o3d.io.write_triangle_mesh(mesh_path, mesh_o3d)
