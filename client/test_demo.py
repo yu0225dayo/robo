@@ -113,7 +113,7 @@ def run_offline_mesh(args, config):
                                    click_x=args.click_x, click_y=args.click_y,
                                    mesh_method=mesh_method)
     elif args.interactive:
-        client.save_reference_mesh_interactive(rgb, mesh_path)
+        client.save_reference_mesh_interactive(rgb, mesh_path)  # (result, cx, cy) だが使わない
     else:
         client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
 
@@ -159,13 +159,14 @@ def run_full(args, config):
 
     mesh_path = args.mesh_out
     mesh_method = sam_cfg.get("mesh_method", "bpa")
+    click_x, click_y = args.click_x, args.click_y
     print("\n[Step 1] SAM-3D でメッシュ生成中...")
     if args.click_x >= 0 and args.click_y >= 0:
         client.save_reference_mesh(rgb, mesh_path,
-                                   click_x=args.click_x, click_y=args.click_y,
+                                   click_x=click_x, click_y=click_y,
                                    mesh_method=mesh_method)
     elif args.interactive:
-        client.save_reference_mesh_interactive(rgb, mesh_path, mesh_method=mesh_method)
+        _, click_x, click_y = client.save_reference_mesh_interactive(rgb, mesh_path, mesh_method=mesh_method)
     else:
         client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
 
@@ -187,7 +188,7 @@ def run_full(args, config):
     # ---- Step 2: 6DoF pose 推定 (server.py 経由) ----
     print("\n[Step 2] SAM-6D で 6DoF pose 推定中...")
     R, t = client.estimate_pose(rgb, depth, intrinsics,
-                                click_x=args.click_x, click_y=args.click_y)
+                                click_x=click_x, click_y=click_y)
     print(f"[Step 2完了] t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
     print(f"  R=\n{R}")
 
@@ -281,7 +282,7 @@ def run_online(args, config):
     # ---- 6DoF pose 推定 ----
     print("\n[Step 1] SAM-6D で 6DoF pose 推定中...")
     R, t = client.estimate_pose(rgb, depth, intrinsics,
-                                click_x=args.click_x, click_y=args.click_y)
+                                click_x=click_x, click_y=click_y)
     print(f"  R=\n{R}")
     print(f"  t={t}")
 
