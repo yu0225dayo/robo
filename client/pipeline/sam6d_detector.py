@@ -140,6 +140,7 @@ class SAM6DClient:
                 raise KeyboardInterrupt("キャンセルされました。")
 
         cv2.destroyAllWindows()
+        cv2.waitKey(1)
         cx, cy = clicked[0]
         result = self.save_reference_mesh(rgb, mesh_save_path,
                                           click_x=cx, click_y=cy, seed=seed,
