@@ -471,6 +471,25 @@ def run_full(config: dict, args):
                            mesh_pts_norm[_vis_idx, 2], c="green", s=3)
                 show_figure(fig)
                 _cv2.waitKey(1)
+
+                # ---- pose 推定 → RGB に 3D 点群を投影 ----
+                print("[Step] pose 推定 → RGB に点群投影中...")
+                try:
+                    R, t, img_pose, img_mesh = client.estimate_pose(
+                        rgb_frozen, depth_frozen, intrinsics,
+                        click_x=click_x, click_y=click_y,
+                    )
+                    from utils.visualization import project_pointcloud_on_image
+                    proj_img = project_pointcloud_on_image(
+                        rgb_frozen, mesh_pts, R, t, intrinsics,
+                        points_unit="mm",
+                    )
+                    _cv2.imshow("mesh_projection", proj_img)
+                    _cv2.waitKey(1)
+                    print("[mesh投影] RGB 画像に点群を投影しました。")
+                except Exception as e:
+                    print(f"[警告] pose 推定失敗のため投影をスキップ: {e}")
+
                 print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
