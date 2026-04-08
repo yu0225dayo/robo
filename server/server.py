@@ -380,20 +380,23 @@ async def reconstruct_mesh(
     template_dir = tdir_resp["template_dir"]
     print(f"[Server] テンプレート完了: {template_dir}")
 
-    from fastapi.responses import Response
+    import base64
     with open(mesh_path, "rb") as f:
-        ply_bytes = f.read()
+        ply_b64 = base64.b64encode(f.read()).decode()
 
-    return Response(
-        content=ply_bytes,
-        media_type="application/octet-stream",
-        headers={
-            "X-Mesh-Path":     mesh_path,
-            "X-Template-Dir":  template_dir,
-            "X-Mask-Center-U": str(mask_center_u),
-            "X-Mask-Center-V": str(mask_center_v),
-        },
-    )
+    # マスク画像を PNG エンコードして返す
+    mask_uint8 = (best_mask.astype(np.uint8) * 255)
+    _, mask_buf = cv2.imencode(".png", mask_uint8)
+    mask_b64 = base64.b64encode(mask_buf).decode()
+
+    return JSONResponse({
+        "ply_b64":        ply_b64,
+        "mask_b64":       mask_b64,
+        "mesh_path":      mesh_path,
+        "template_dir":   template_dir,
+        "mask_center_u":  mask_center_u,
+        "mask_center_v":  mask_center_v,
+    })
 
 
 @app.post("/pose_estimate")
