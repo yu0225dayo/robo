@@ -39,6 +39,29 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def put_text_jp(img: np.ndarray, text: str, pos, font_size: int = 24, color=(0, 255, 0)) -> np.ndarray:
+    """PIL を使って日本語テキストをBGR画像に描画する"""
+    from PIL import Image, ImageDraw, ImageFont
+    import cv2 as _cv2
+    img_pil = Image.fromarray(_cv2.cvtColor(img, _cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+    font = None
+    for fp in [
+        "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+        "C:/Windows/Fonts/YuGothM.ttc",
+    ]:
+        try:
+            font = ImageFont.truetype(fp, font_size)
+            break
+        except (IOError, OSError):
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+    draw.text(pos, text, font=font, fill=(color[2], color[1], color[0]))  # BGR→RGB
+    return _cv2.cvtColor(np.array(img_pil), _cv2.COLOR_RGB2BGR)
+
+
 # ==============================================================
 # オフラインフェーズ: reference mesh の生成・保存
 # ==============================================================
@@ -417,9 +440,7 @@ def run_full(config: dict, args):
             rgb, depth, _ = camera.capture()
 
             status = "[g]で把持生成 / [c]で物体選択" if mesh_pts is not None else "[g]で把持生成（自動でmesh生成）/ [c]で物体選択のみ"
-            preview = rgb.copy()
-            _cv2.putText(preview, status, (10, 30),
-                         _cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            preview = put_text_jp(rgb.copy(), status, (10, 10))
             key = camera.show_preview(preview, depth)
 
             if key == ord("q"):
