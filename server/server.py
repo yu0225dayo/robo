@@ -384,14 +384,17 @@ async def reconstruct_mesh(
     with open(mesh_path, "rb") as f:
         ply_b64 = base64.b64encode(f.read()).decode()
 
-    # マスク画像を PNG エンコードして返す
-    mask_uint8 = (best_mask.astype(np.uint8) * 255)
-    _, mask_buf = cv2.imencode(".png", mask_uint8)
-    mask_b64 = base64.b64encode(mask_buf).decode()
+    # 3マスク全部を PNG エンコードして返す (確認用)
+    masks_b64 = []
+    for m in masks:
+        _, buf = cv2.imencode(".png", (m.astype(np.uint8) * 255))
+        masks_b64.append(base64.b64encode(buf).decode())
 
     return JSONResponse({
         "ply_b64":        ply_b64,
-        "mask_b64":       mask_b64,
+        "masks_b64":      masks_b64,          # [mask0, mask1, mask2]
+        "scores":         scores.tolist(),     # [score0, score1, score2]
+        "best_idx":       int(np.argmax(scores)),
         "mesh_path":      mesh_path,
         "template_dir":   template_dir,
         "mask_center_u":  mask_center_u,

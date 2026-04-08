@@ -58,7 +58,7 @@ class SAM6DClient:
         click_y: int = -1,
         seed: int = 42,
         mesh_method: str = "bpa",
-    ) -> Tuple[str, Optional[np.ndarray]]:
+    ) -> Tuple[str, list, list]:
         """
         RGB画像をサーバに送り、SAM-3D で生成した reference mesh を保存する
 
@@ -96,12 +96,13 @@ class SAM6DClient:
         with open(mesh_save_path, "wb") as f:
             f.write(base64.b64decode(data["ply_b64"]))
 
-        # マスク画像をデコード
-        mask_img: Optional[np.ndarray] = None
-        mask_b64 = data.get("mask_b64", "")
-        if mask_b64:
-            mask_arr = np.frombuffer(base64.b64decode(mask_b64), np.uint8)
-            mask_img = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
+        # 3マスクをデコード
+        masks = []
+        for b64 in data.get("masks_b64", []):
+            arr = np.frombuffer(base64.b64decode(b64), np.uint8)
+            masks.append(cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE))
+        scores   = data.get("scores", [])
+        best_idx = data.get("best_idx", 0)
 
         self._server_mesh_path = data.get("mesh_path", "")
         self._template_dir     = data.get("template_dir", "")
@@ -109,13 +110,14 @@ class SAM6DClient:
         mask_v = data.get("mask_center_v", "?")
 
         print(f"[SAM6D] mesh 保存完了: {mesh_save_path}  mask_center=({mask_u},{mask_v})")
+        print(f"[SAM6D] SAM scores: {[f'{s:.3f}' for s in scores]}  best_idx={best_idx}")
         if self._server_mesh_path:
             print(f"[SAM6D] サーバ側 mesh: {self._server_mesh_path}")
         if self._template_dir:
             print(f"[SAM6D] テンプレート: {self._template_dir}")
 
         self._mesh_path = mesh_save_path
-        return mesh_save_path, mask_img
+        return mesh_save_path, masks, scores
 
     def save_reference_mesh_interactive(
         self,
@@ -123,7 +125,7 @@ class SAM6DClient:
         mesh_save_path: str,
         seed: int = 42,
         mesh_method: str = "bpa",
-    ) -> Tuple[str, int, int, Optional[np.ndarray]]:
+    ) -> Tuple[str, int, int, list, list]:
         """インタラクティブモード: クリックして物体を指定する"""
         clicked = []
 
@@ -153,12 +155,12 @@ class SAM6DClient:
         cv2.destroyAllWindows()
         cv2.waitKey(1)
         cx, cy = clicked[0]
-        mesh_path, mask_img = self.save_reference_mesh(
+        mesh_path, masks, scores = self.save_reference_mesh(
             rgb, mesh_save_path,
             click_x=cx, click_y=cy, seed=seed,
             mesh_method=mesh_method,
         )
-        return mesh_path, cx, cy, mask_img
+        return mesh_path, cx, cy, masks, scores
 
     def load_reference_mesh(
         self,

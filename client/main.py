@@ -451,7 +451,7 @@ def run_full(config: dict, args):
                 rgb_frozen   = rgb.copy()
                 depth_frozen = depth.copy()
                 os.makedirs(os.path.dirname(os.path.abspath(mesh_path)), exist_ok=True)
-                _, click_x, click_y, mask_img = client.save_reference_mesh_interactive(
+                _, click_x, click_y, sam_masks, sam_scores = client.save_reference_mesh_interactive(
                     rgb_frozen, mesh_path, mesh_method=mesh_method
                 )
                 mesh_pts      = load_pointcloud_ply(mesh_path, target_points=2048)
@@ -460,24 +460,37 @@ def run_full(config: dict, args):
                 mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
                 print(f"[mesh生成完了] {mesh_path}  scale={mesh_scale_m:.4f} m")
 
-                # ---- マスク / bbox を out_dir に保存 ----
+                # ---- 3マスクを横並びで out_dir に保存・表示 ----
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
-                if mask_img is not None:
-                    _cv2.imwrite(os.path.join(out_dir, "mask.png"), mask_img)
-                    # RGB にマスクオーバーレイ + bbox を描画して保存
-                    overlay = rgb_frozen.copy()
-                    colored = np.zeros_like(overlay)
-                    colored[mask_img > 127] = (0, 255, 0)
-                    overlay = _cv2.addWeighted(overlay, 0.7, colored, 0.3, 0)
-                    ys, xs = np.where(mask_img > 127)
-                    if len(xs) > 0:
-                        x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
-                        _cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 255), 2)
-                    _cv2.imwrite(os.path.join(out_dir, "mask_bbox.png"), overlay)
-                    _cv2.imshow("mask_bbox", overlay)
+                if sam_masks:
+                    panels = []
+                    for i, (mask, score) in enumerate(zip(sam_masks, sam_scores)):
+                        panel = rgb_frozen.copy()
+                        colored = np.zeros_like(panel)
+                        colored[mask > 127] = (0, 255, 0)
+                        panel = _cv2.addWeighted(panel, 0.7, colored, 0.3, 0)
+                        # bbox
+                        ys, xs = np.where(mask > 127)
+                        if len(xs) > 0:
+                            x1, y1 = int(xs.min()), int(ys.min())
+                            x2, y2 = int(xs.max()), int(ys.max())
+                            _cv2.rectangle(panel, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                        label = f"mask{i} score={score:.3f}"
+                        if i == int(np.argmax(sam_scores)):
+                            label += " [BEST]"
+                            _cv2.rectangle(panel, (0, 0), (panel.shape[1]-1, panel.shape[0]-1),
+                                           (0, 0, 255), 4)
+                        _cv2.putText(panel, label, (10, 30),
+                                     _cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                        _cv2.imwrite(os.path.join(out_dir, f"mask{i}.png"), panel)
+                        panels.append(panel)
+                    # 横並び1枚に結合して表示
+                    compare = np.hstack(panels)
+                    _cv2.imwrite(os.path.join(out_dir, "masks_compare.png"), compare)
+                    _cv2.imshow("SAM masks (0=small / 1=mid / 2=large)", compare)
                     _cv2.waitKey(1)
-                    print(f"[マスク] 保存: {out_dir}/mask.png, mask_bbox.png")
+                    print(f"[マスク] 保存: {out_dir}/mask0.png ~ mask2.png, masks_compare.png")
 
                 # 3D 点群のみ表示 (matplotlib, ダウンサンプリング)
                 _vis_n = min(512, len(mesh_pts_norm))
@@ -521,7 +534,7 @@ def run_full(config: dict, args):
                     depth_frozen = depth.copy()
                     os.makedirs(os.path.dirname(os.path.abspath(mesh_path)), exist_ok=True)
                     try:
-                        _, click_x, click_y, mask_img = client.save_reference_mesh_interactive(
+                        _, click_x, click_y, sam_masks, sam_scores = client.save_reference_mesh_interactive(
                             rgb_frozen, mesh_path, mesh_method=mesh_method
                         )
                     except KeyboardInterrupt:
