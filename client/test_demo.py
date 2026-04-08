@@ -187,12 +187,18 @@ def run_full(args, config):
 
     # ---- Step 2: 6DoF pose 推定 (server.py 経由) ----
     print("\n[Step 2] SAM-6D で 6DoF pose 推定中...")
-    R, t = client.estimate_pose(rgb, depth, intrinsics,
-                                click_x=click_x, click_y=click_y)
+    R, t, img_pose, img_mesh = client.estimate_pose(rgb, depth, intrinsics,
+                                                    click_x=click_x, click_y=click_y)
     print(f"[Step 2完了] t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
     print(f"  R=\n{R}")
 
     os.makedirs("output/test", exist_ok=True)
+    if img_pose is not None:
+        cv2.imwrite("output/test/server_pointcloud.png", img_pose)
+        print("[Step 2] 点群投影画像保存: output/test/server_pointcloud.png")
+    if img_mesh is not None:
+        cv2.imwrite("output/test/server_mesh.png", img_mesh)
+        print("[Step 2] メッシュ投影画像保存: output/test/server_mesh.png")
 
     if args.skip_grasp:
         print("\n[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")
@@ -281,8 +287,8 @@ def run_online(args, config):
 
     # ---- 6DoF pose 推定 ----
     print("\n[Step 1] SAM-6D で 6DoF pose 推定中...")
-    R, t = client.estimate_pose(rgb, depth, intrinsics,
-                                click_x=click_x, click_y=click_y)
+    R, t, img_pose, img_mesh = client.estimate_pose(rgb, depth, intrinsics,
+                                                    click_x=args.click_x, click_y=args.click_y)
     print(f"  R=\n{R}")
     print(f"  t={t}")
 
@@ -290,6 +296,14 @@ def run_online(args, config):
     mesh_pts = load_pointcloud_ply(args.mesh, target_points=2048)
     bgr = rgb  # cv2.imread は BGR で読み込むためそのまま使用
     os.makedirs("output/test", exist_ok=True)
+
+    # サーバから受信した投影画像を保存
+    if img_pose is not None:
+        cv2.imwrite("output/test/server_pointcloud.png", img_pose)
+        print("[Pose確認] サーバ点群投影画像を保存: output/test/server_pointcloud.png")
+    if img_mesh is not None:
+        cv2.imwrite("output/test/server_mesh.png", img_mesh)
+        print("[Pose確認] サーバメッシュ投影画像を保存: output/test/server_mesh.png")
 
     bgr = rgb  # cv2.imread は BGR で読み込むためそのまま使用
     # Open3D OffscreenRenderer でメッシュ面をレンダリング (FoundationPose的手法)

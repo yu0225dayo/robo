@@ -178,7 +178,7 @@ class SAM6DClient:
         intrinsics: CameraIntrinsics,
         click_x: int = -1,
         click_y: int = -1,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
         """
         RGBD + reference mesh からカメラ座標系での物体 6DoF pose を推定する
 
@@ -236,18 +236,20 @@ class SAM6DClient:
         t = np.array(data["t"], dtype=np.float32)  # (3,)
         print(f"[SAM6D] pose 推定完了: t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
 
-        # サーバ生成画像を保存
-        import base64, cv2 as _cv2, os as _os
-        _os.makedirs("output/pose", exist_ok=True)
-        for key, fname in [("img_pose", "output/pose/pose_pointcloud.png"),
-                            ("img_mesh", "output/pose/pose_mesh.png")]:
+        # サーバ生成画像をデコードして返す
+        import base64, cv2 as _cv2
+        img_pose_bgr: Optional[np.ndarray] = None
+        img_mesh_bgr: Optional[np.ndarray] = None
+        for key, attr in [("img_pose", "pose"), ("img_mesh", "mesh")]:
             b64 = data.get(key, "")
             if b64:
                 img = _cv2.imdecode(
                     np.frombuffer(base64.b64decode(b64), np.uint8),
                     _cv2.IMREAD_COLOR,
                 )
-                _cv2.imwrite(fname, img)
-                print(f"[SAM6D] 画像保存: {fname}")
+                if key == "img_pose":
+                    img_pose_bgr = img
+                else:
+                    img_mesh_bgr = img
 
-        return R, t
+        return R, t, img_pose_bgr, img_mesh_bgr

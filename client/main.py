@@ -24,6 +24,7 @@ real_world_demo メインエントリーポイント
 """
 
 import argparse
+import json
 import os
 import sys
 import yaml
@@ -100,6 +101,8 @@ def run_online(config: dict, args):
     """
     毎フレーム: RGBD → SAM-6D pose → Shape2Gesture → ロボット
     """
+    import cv2 as _cv2
+    from datetime import datetime
     from pipeline.camera import RealSenseCamera
     from pipeline.sam6d_detector import SAM6DClient
     from pipeline.grasp_generator import GraspGenerator
@@ -110,9 +113,9 @@ def run_online(config: dict, args):
     )
     from utils.coord_transform import (
         CameraIntrinsics, ObjectPose,
-        estimate_scale_from_depth, project_to_image,
+        estimate_scale_from_depth, project_to_image, normalized_to_camera,
     )
-    from utils.pointcloud_utils import load_pointcloud_ply
+    from utils.pointcloud_utils import load_pointcloud_ply, normalize_pointcloud
 
     cam_cfg   = config["camera"]
     sam_cfg   = config["sam3d"]
@@ -144,8 +147,9 @@ def run_online(config: dict, args):
     template_dir     = args.template_dir or ""
     client.load_reference_mesh(args.mesh, server_mesh_path, template_dir)
 
-    # reference mesh の正規化点群を読み込み (GraspGenerator 入力 + スケール推定)
+    # reference mesh の点群を読み込み (GraspGenerator 入力 + スケール推定)
     mesh_pts = load_pointcloud_ply(args.mesh, target_points=2048)
+    mesh_pts_norm = normalize_pointcloud(mesh_pts)  # unit sphere (スケール推定用)
 
     # ロボット
     mode = robot_cfg["mode"]
@@ -161,6 +165,20 @@ def run_online(config: dict, args):
         fps=cam_cfg["fps"],
     )
     camera.start()
+
+    # カメラ内部パラメータを camera.json として保存
+    cam_json = {
+        "fx": float(camera.fx),
+        "fy": float(camera.fy),
+        "cx": float(camera.cx),
+        "cy": float(camera.cy),
+        "width": cam_cfg["width"],
+        "height": cam_cfg["height"],
+    }
+    os.makedirs("output", exist_ok=True)
+    with open("camera.json", "w") as f:
+        json.dump(cam_json, f, indent=2)
+    print("[Camera] 内部パラメータ保存: camera.json")
 
     intrinsics = CameraIntrinsics(
         fx=camera.fx, fy=camera.fy,
@@ -184,20 +202,40 @@ def run_online(config: dict, args):
                 break
 
             elif key == ord("g"):
+                out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
+                os.makedirs(out_dir, exist_ok=True)
+
                 # ---- Step 2: SAM-6D で 6DoF pose 推定 ----
                 print("\n" + "=" * 50)
                 print("[Step 2] SAM-6D で 6DoF pose 推定中...")
                 print("=" * 50)
 
-                R, t = client.estimate_pose(rgb, depth, intrinsics)
+                R, t, img_pose, img_mesh = client.estimate_pose(
+                    rgb, depth, intrinsics,
+                    click_x=args.click_x, click_y=args.click_y,
+                )
 
-                # マスク重心から mask_u, mask_v を取得 (スケール推定用)
-                # t の x,y から逆投影でピクセル座標を計算
-                mask_u = int(intrinsics.fx * t[0] / t[2] + intrinsics.cx)
-                mask_v = int(intrinsics.fy * t[1] / t[2] + intrinsics.cy)
+                # サーバから受信した投影画像を保存・表示
+                if img_pose is not None:
+                    path = os.path.join(out_dir, "server_pointcloud.png")
+                    _cv2.imwrite(path, img_pose)
+                    _cv2.imshow("Server: Pointcloud Projection", img_pose)
+                    _cv2.waitKey(1)
+                    print(f"[投影] 点群投影画像: {path}")
+
+                if img_mesh is not None:
+                    path = os.path.join(out_dir, "server_mesh.png")
+                    _cv2.imwrite(path, img_mesh)
+                    _cv2.imshow("Server: Mesh Projection", img_mesh)
+                    _cv2.waitKey(1)
+                    print(f"[投影] メッシュ投影画像: {path}")
+
+                # mask_u, mask_v: スケール推定用 (tの投影)
+                mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
+                mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
 
                 scale = estimate_scale_from_depth(
-                    depth, mask_u, mask_v, intrinsics, mesh_pts
+                    depth, mask_u, mask_v, intrinsics, mesh_pts_norm
                 )
 
                 # 6DoF pose オブジェクト (R, t, scale)
@@ -208,7 +246,6 @@ def run_online(config: dict, args):
                 print("[Step 3] Shape2Gesture で把持姿勢を生成中...")
                 print("=" * 50)
 
-                # GraspGenerator は正規化点群を期待する
                 grasp_results = generator.generate(
                     mesh_pts,
                     num_samples=model_cfg["num_samples"],
@@ -228,14 +265,7 @@ def run_online(config: dict, args):
                     labels=seg_labels if vis_cfg["show_segmentation"] else None,
                 )
 
-                # ---- Step 4: カメラ画像に投影して保存 ----
-                import cv2 as _cv2
-                from datetime import datetime
-                out_dir = os.path.join(
-                    "output", datetime.now().strftime("%Y%m%d_%H%M%S")
-                )
-                os.makedirs(out_dir, exist_ok=True)
-
+                # ---- Step 4: 把持姿勢をカメラ画像に投影して保存・表示 ----
                 for i, (lh_norm, rh_norm) in enumerate(grasp_results):
                     result_img = project_hands_on_image(
                         rgb, lh_norm, rh_norm,
@@ -255,9 +285,7 @@ def run_online(config: dict, args):
                 print("[Step 5] ロボットに把持姿勢を送信中...")
                 print("=" * 50)
 
-                # 正規化把持姿勢 → カメラ座標系 (ロボット送信用)
-                from utils.coord_transform import normalized_to_camera
-                left_hand_cam  = normalized_to_camera(left_hand_norm,  pose)
+                left_hand_cam  = normalized_to_camera(left_hand_norm, pose)
                 right_hand_cam = normalized_to_camera(right_hand_norm, pose)
 
                 if not args.no_robot:
@@ -323,6 +351,14 @@ def main():
     parser.add_argument("--no-robot", action="store_true")
     parser.add_argument("--num-samples", type=int, default=None)
     parser.add_argument("--epoch",       type=int, default=None)
+    parser.add_argument(
+        "--click-x", type=int, default=-1,
+        help="[online] 物体クリック座標 X (-1: 画像中央)",
+    )
+    parser.add_argument(
+        "--click-y", type=int, default=-1,
+        help="[online] 物体クリック座標 Y (-1: 画像中央)",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.config):
