@@ -44,6 +44,7 @@ def normalize_pointcloud(point_set: np.ndarray) -> np.ndarray:
         正規化済み (N, 3) numpy array
     """
     point_set = point_set - np.expand_dims(np.mean(point_set, axis=0), 0)
-    dist = np.max(np.sqrt(np.sum(point_set ** 2, axis=1)), 0)
+    bbox_extents = point_set.max(axis=0) - point_set.min(axis=0)
+    dist = np.max(bbox_extents) / 2.0
     point_set = point_set / dist
     return point_set

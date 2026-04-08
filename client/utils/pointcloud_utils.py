@@ -100,7 +100,8 @@ def normalize_pointcloud(points: np.ndarray) -> np.ndarray:
         正規化済み (N, 3) numpy array
     """
     centered = points - np.expand_dims(np.mean(points, axis=0), 0)
-    dist = np.max(np.sqrt(np.sum(centered ** 2, axis=1)), 0)
+    bbox_extents = centered.max(axis=0) - centered.min(axis=0)
+    dist = np.max(bbox_extents) / 2.0
     return (centered / dist).astype(np.float32)
 
 
