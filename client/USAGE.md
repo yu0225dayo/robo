@@ -11,60 +11,44 @@ RealSense カメラを使った物体把持デモのメインスクリプト。
 
 ---
 
-## Step 1: reference mesh を生成（物体ごとに1回）
+## 通常の使い方（full モード）
 
 ```bash
-python main.py --mode offline-mesh --mesh-out meshes/cup.ply
+python main.py
 ```
 
-- RealSense プレビューが表示される
-- `[c]` キー → クリックで物体を指定 → Enter で確定 → mesh 生成開始
-- `[q]` キー → 終了
-- 完了すると `meshes/cup.ply` が保存される
-- サーバ側の mesh パスとテンプレートディレクトリがターミナルに表示される（Step 2 で使用）
-
----
-
-## Step 2: 把持姿勢生成（毎回）
-
-### ロボットなし（デバッグ用）
-
-```bash
-python main.py --mesh meshes/cup.ply --no-robot
-```
-
-### ロボットあり
-
-```bash
-python main.py --mesh meshes/cup.ply
-```
-
-### サーバ側 mesh パスを指定（精度向上）
-
-Step 1 完了時に表示されるパスを `--server-mesh-path` と `--template-dir` に渡す。
-
-```bash
-python main.py \
-  --mesh meshes/cup.ply \
-  --server-mesh-path "/path/to/server/mesh.ply" \
-  --template-dir "/path/to/templates" \
-  --no-robot
-```
-
-### 物体位置をクリック座標で指定
-
-```bash
-python main.py --mesh meshes/cup.ply --click-x 320 --click-y 240 --no-robot
-```
-
----
-
-## 操作方法（Step 2 実行中）
+起動するとRealSenseのプレビューが表示される。
 
 | キー | 動作 |
 |------|------|
-| `g`  | SAM-6D で pose 推定 → 把持姿勢生成 → 画像保存 |
+| `c`  | 物体をクリックして選択 → 3D mesh 生成（サーバで SAM-3D 実行） |
+| `g`  | pose 推定 → 把持姿勢生成 → 画像投影（`c` 実行後に有効） |
 | `q`  | 終了 |
+
+### 手順
+
+1. `c` → ウィンドウ上で把持したい物体をクリック → Enter で確定
+2. サーバで 3D mesh が生成されるまで待つ（数十秒）
+3. `g` → SAM-6D で pose 推定 → 把持姿勢を画像に投影
+4. 物体を変える場合は再度 `c` で mesh を再生成
+
+---
+
+## mesh 保存先を指定する場合
+
+```bash
+python main.py --mesh-out meshes/cup.ply
+```
+
+デフォルトは `meshes/object.ply`。
+
+---
+
+## ロボットなしで動作確認
+
+```bash
+python main.py --no-robot
+```
 
 ---
 
@@ -78,7 +62,23 @@ python main.py --mesh meshes/cup.ply --click-x 320 --click-y 240 --no-robot
 | `server_mesh.png`       | サーバが生成した3Dメッシュ投影画像 |
 | `grasp_00.png` 〜       | 把持姿勢をRGB画像に投影した結果 |
 
-また、起動時に `camera.json` がカレントディレクトリに保存される。
+起動時に `camera.json` がカレントディレクトリに保存される（カメラ内部パラメータ）。
+
+---
+
+## その他のモード
+
+### online モード（mesh 生成済みの場合）
+
+```bash
+python main.py --mode online --mesh meshes/cup.ply --no-robot
+```
+
+### offline-mesh モード（mesh 生成のみ）
+
+```bash
+python main.py --mode offline-mesh --mesh-out meshes/cup.ply
+```
 
 ---
 
@@ -87,13 +87,13 @@ python main.py --mesh meshes/cup.ply --click-x 320 --click-y 240 --no-robot
 | 引数 | デフォルト | 説明 |
 |------|-----------|------|
 | `--config` | `config.yaml` | 設定ファイルパス |
-| `--mode` | `online` | `online`: 把持生成 / `offline-mesh`: mesh生成 |
+| `--mode` | `full` | `full` / `online` / `offline-mesh` |
+| `--mesh-out` | `meshes/object.ply` | [full/offline-mesh] mesh 保存先 |
 | `--mesh` | — | [online] ローカル reference mesh (.ply) パス |
-| `--mesh-out` | `meshes/object.ply` | [offline-mesh] mesh 保存先 |
-| `--server-mesh-path` | — | サーバ側 mesh パス（offline-mesh 後に表示） |
-| `--template-dir` | — | サーバ側テンプレートディレクトリ |
-| `--click-x` | `-1` | 物体クリック座標 X（-1: 画像中央） |
-| `--click-y` | `-1` | 物体クリック座標 Y（-1: 画像中央） |
+| `--server-mesh-path` | — | [online] サーバ側 mesh パス |
+| `--template-dir` | — | [online] サーバ側テンプレートディレクトリ |
+| `--click-x` | `-1` | [online] 物体クリック座標 X（-1: 画像中央） |
+| `--click-y` | `-1` | [online] 物体クリック座標 Y（-1: 画像中央） |
 | `--no-robot` | `False` | ロボット送信をスキップ |
 | `--num-samples` | config参照 | 把持候補生成数 |
 | `--epoch` | config参照 | PositionVAE エポック番号 |
