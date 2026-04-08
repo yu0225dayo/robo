@@ -505,10 +505,17 @@ def run_full(config: dict, args):
                 print("\n" + "=" * 50)
                 print("[Step 1] SAM-6D で 6DoF pose 推定中...")
                 print("=" * 50)
-                R, t, img_pose, img_mesh = client.estimate_pose(
-                    rgb_frozen, depth_frozen, intrinsics,
-                    click_x=click_x, click_y=click_y,
-                )
+                try:
+                    R, t, img_pose, img_mesh = client.estimate_pose(
+                        rgb_frozen, depth_frozen, intrinsics,
+                        click_x=click_x, click_y=click_y,
+                    )
+                except Exception as e:
+                    print(f"[エラー] pose 推定失敗: {e}")
+                    print("  → サーバログを確認してください。[g] で再試行できます。")
+                    rgb_frozen = depth_frozen = None
+                    mesh_pts = mesh_pts_norm = None
+                    continue
                 if img_mesh is not None:
                     _cv2.imwrite(os.path.join(out_dir, "pose.png"), img_mesh)
                     _cv2.imshow("pose", img_mesh); _cv2.waitKey(1)
