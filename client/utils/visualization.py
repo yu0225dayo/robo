@@ -258,15 +258,154 @@ def _render_fig(fig) -> np.ndarray:
     return _cv2.imdecode(np.frombuffer(buf.getvalue(), np.uint8), _cv2.IMREAD_COLOR)
 
 
-def show_figure(fig, save_path: str = None):
-    """matplotlib figure を PNG ファイルに保存して cv2 で表示 (waitKey なし)"""
+def show_figure(fig, save_path: str = None, show: bool = True):
+    """matplotlib figure を PNG に変換して保存・表示する
+
+    Args:
+        fig:       matplotlib figure
+        save_path: 保存先パス (None: 保存しない)
+        show:      True のとき cv2.imshow で表示する
+    """
     img = _render_fig(fig)
     if img is None:
         return
     if save_path:
         _cv2.imwrite(save_path, img)
-    _cv2.imshow("Visualization", img)
-    # waitKey はメインループの show_preview に任せる (ここでは呼ばない)
+    if show:
+        _cv2.imshow("Visualization", img)
+        # waitKey はメインループの show_preview に任せる (ここでは呼ばない)
+
+
+def save_grasp_figure(
+    points: np.ndarray,
+    left_hand: np.ndarray,
+    right_hand: np.ndarray,
+    labels: np.ndarray = None,
+    save_path: str = None,
+    title: str = "",
+):
+    """把持姿勢を Agg で描画してファイルに保存する (表示なし)"""
+    fig = plt.figure(figsize=(6, 6))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_title(title)
+    ax.set_xlim(-1.2, 1.2)
+    ax.set_ylim(-1.2, 1.2)
+    ax.set_zlim(-1.2, 1.2)
+    ax.set_axis_off()
+    if labels is not None:
+        draw_segmented_pointcloud(points, labels, ax)
+    else:
+        draw_pointcloud(points, ax, color="green")
+    draw_hand(left_hand, ax, color="orange")
+    draw_hand(right_hand, ax, color="purple")
+    show_figure(fig, save_path=save_path, show=False)
+    plt.close(fig)
+
+
+class Open3DGraspVisualizer:
+    """
+    open3d を使ったインタラクティブ3D可視化
+
+    マウスで回転・拡大縮小・移動できる。
+    メインループから毎フレーム poll() を呼ぶことで cv2 ウィンドウと共存できる。
+    """
+
+    def __init__(self):
+        self._vis = None
+        self._first = True
+
+    def setup(self, title: str = "Grasp 3D"):
+        try:
+            import open3d as o3d
+            self._vis = o3d.visualization.Visualizer()
+            self._vis.create_window(window_name=title, width=700, height=700)
+            self._first = True
+        except Exception as e:
+            print(f"[Open3DVisualizer] 初期化失敗: {e}")
+            self._vis = None
+
+    # ------------------------------------------------------------------
+
+    def _make_pcd(self, points: np.ndarray, labels=None):
+        import open3d as o3d
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points.astype(np.float64))
+        if labels is not None:
+            colors = np.zeros((len(points), 3), dtype=np.float64)
+            colors[labels == 0] = [0.0, 1.0, 0.0]
+            colors[labels == 1] = [0.0, 0.0, 1.0]
+            colors[labels == 2] = [1.0, 0.0, 0.0]
+            pcd.colors = o3d.utility.Vector3dVector(colors)
+        else:
+            pcd.paint_uniform_color([0.0, 1.0, 0.0])
+        return pcd
+
+    def _make_hand_ls(self, hand: np.ndarray, color):
+        import open3d as o3d
+        ls = o3d.geometry.LineSet()
+        ls.points = o3d.utility.Vector3dVector(hand.astype(np.float64))
+        ls.lines = o3d.utility.Vector2iVector(list(HAND_CONNECTIONS))
+        ls.colors = o3d.utility.Vector3dVector([color] * len(HAND_CONNECTIONS))
+        return ls
+
+    # ------------------------------------------------------------------
+
+    def update_pointcloud(self, points: np.ndarray, labels=None):
+        """点群のみ更新表示"""
+        if self._vis is None:
+            self.setup("Reference Mesh")
+        if self._vis is None:
+            return
+        try:
+            self._vis.clear_geometries()
+            self._vis.add_geometry(self._make_pcd(points, labels))
+            if self._first:
+                self._vis.reset_view_point(True)
+                self._first = False
+            self.poll()
+        except Exception as e:
+            print(f"[Open3DVisualizer] update_pointcloud 失敗: {e}")
+
+    def update(
+        self,
+        points: np.ndarray,
+        left_hand: np.ndarray,
+        right_hand: np.ndarray,
+        labels=None,
+    ):
+        """点群 + 把持姿勢を更新表示"""
+        if self._vis is None:
+            self.setup("Grasp 3D")
+        if self._vis is None:
+            return
+        try:
+            self._vis.clear_geometries()
+            self._vis.add_geometry(self._make_pcd(points, labels))
+            self._vis.add_geometry(self._make_hand_ls(left_hand,  [1.0, 0.5, 0.0]))
+            self._vis.add_geometry(self._make_hand_ls(right_hand, [0.5, 0.0, 1.0]))
+            if self._first:
+                self._vis.reset_view_point(True)
+                self._first = False
+            self.poll()
+        except Exception as e:
+            print(f"[Open3DVisualizer] update 失敗: {e}")
+
+    def poll(self):
+        """イベント処理 (メインループから毎フレーム呼ぶ)"""
+        if self._vis:
+            try:
+                self._vis.poll_events()
+                self._vis.update_renderer()
+            except Exception:
+                self._vis = None
+
+    def destroy(self):
+        if self._vis:
+            try:
+                self._vis.destroy_window()
+            except Exception:
+                pass
+            self._vis = None
 from utils.coord_transform import CameraIntrinsics, ObjectPose, normalized_to_camera, project_to_image
 
 # 手スケルトン: Shape2Gestureの関節定義に基づく接続リスト

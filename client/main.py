@@ -346,7 +346,7 @@ def run_full(config: dict, args):
     from pipeline.grasp_generator import GraspGenerator
     from pipeline.robot_interface import RobotInterface, GraspPose
     from utils.visualization import (
-        live_visualize_setup, live_visualize_update,
+        Open3DGraspVisualizer, save_grasp_figure,
         visualize_multiple_grasps, project_hands_on_image, show_figure,
     )
     from utils.coord_transform import (
@@ -414,7 +414,7 @@ def run_full(config: dict, args):
         width=cam_cfg["width"], height=cam_cfg["height"],
     )
 
-    fig, ax = live_visualize_setup()
+    o3d_vis = Open3DGraspVisualizer()
 
     # 状態変数
     mesh_pts      = None
@@ -432,6 +432,7 @@ def run_full(config: dict, args):
     try:
         while True:
             rgb, depth, _ = camera.capture()
+            o3d_vis.poll()  # open3d ウィンドウのイベント処理
 
             status = "[g]で把持生成 / [c]で物体選択" if mesh_pts is not None else "[g]で把持生成（自動でmesh生成）/ [c]で物体選択のみ"
             preview = put_text_jp(rgb.copy(), status, (10, 10))
@@ -460,13 +461,7 @@ def run_full(config: dict, args):
                 # 3D 点群のみ表示 (ダウンサンプリング)
                 _vis_n = min(512, len(mesh_pts_norm))
                 _vis_idx = np.random.choice(len(mesh_pts_norm), _vis_n, replace=False)
-                ax.cla()
-                ax.set_title("Reference Mesh")
-                ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
-                ax.set_axis_off()
-                ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
-                           c="green", s=3)
-                show_figure(fig)
+                o3d_vis.update_pointcloud(mesh_pts_norm[_vis_idx])
                 print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
@@ -490,13 +485,7 @@ def run_full(config: dict, args):
                     # 3D 点群を表示 (ダウンサンプリング)
                     _vis_n = min(512, len(mesh_pts_norm))
                     _vis_idx = np.random.choice(len(mesh_pts_norm), _vis_n, replace=False)
-                    ax.cla()
-                    ax.set_title("Reference Mesh")
-                    ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
-                    ax.set_axis_off()
-                    ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
-                               c="green", s=3)
-                    show_figure(fig)
+                    o3d_vis.update_pointcloud(mesh_pts_norm[_vis_idx])
 
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
@@ -533,30 +522,46 @@ def run_full(config: dict, args):
                     mesh_pts, num_samples=model_cfg["num_samples"]
                 )
                 norm_pts, seg_labels = generator.get_segmentation(mesh_pts)
-                left_hand_norm, right_hand_norm = grasp_results[0]
-                # ダウンサンプリングして表示
+
+                # ダウンサンプリング (可視化・保存共通)
                 _vis_n = min(512, len(norm_pts))
                 _vis_idx = np.random.choice(len(norm_pts), _vis_n, replace=False)
                 _vis_pts = norm_pts[_vis_idx]
-                _vis_labels = seg_labels[_vis_idx] if seg_labels is not None else None
-                live_visualize_update(
-                    fig, ax, _vis_pts, left_hand_norm, right_hand_norm,
-                    labels=_vis_labels if vis_cfg["show_segmentation"] else None,
-                    save_path=os.path.join(out_dir, "grasp_3d.png"),
-                )
+                _vis_labels = (seg_labels[_vis_idx]
+                               if seg_labels is not None and vis_cfg["show_segmentation"]
+                               else None)
 
-                # ---- RGB 画像に把持姿勢を投影 ----
-                grasp_img = project_hands_on_image(
-                    rgb_frozen, left_hand_norm, right_hand_norm,
+                # ---- 全サンプルをサブフォルダに保存 ----
+                for i, (lh, rh) in enumerate(grasp_results):
+                    sd = os.path.join(out_dir, f"sample_{i}")
+                    os.makedirs(sd, exist_ok=True)
+                    save_grasp_figure(
+                        _vis_pts, lh, rh,
+                        labels=_vis_labels,
+                        save_path=os.path.join(sd, "grasp_3d.png"),
+                        title=f"Sample {i}",
+                    )
+                    grasp_img_i = project_hands_on_image(
+                        rgb_frozen, lh, rh,
+                        object_pose=pose, intrinsics=intrinsics,
+                    )
+                    _cv2.imwrite(os.path.join(sd, "rgb_w_grasp.png"), grasp_img_i)
+                print(f"[完了] {len(grasp_results)} サンプル保存: {out_dir}")
+
+                # ---- sample_0 のみ表示 ----
+                lh0, rh0 = grasp_results[0]
+                o3d_vis.update(_vis_pts, lh0, rh0, labels=_vis_labels)
+                grasp_img0 = project_hands_on_image(
+                    rgb_frozen, lh0, rh0,
                     object_pose=pose, intrinsics=intrinsics,
                 )
-                _cv2.imwrite(os.path.join(out_dir, "rgb_w_grasp.png"), grasp_img)
-                _cv2.imshow("rgb_w_grasp", grasp_img); _cv2.waitKey(1)
-                print(f"[完了] 出力: {out_dir}")
+                _cv2.imwrite(os.path.join(out_dir, "rgb_w_grasp.png"), grasp_img0)
+                _cv2.imshow("rgb_w_grasp", grasp_img0)
+                _cv2.waitKey(1)
 
                 # ---- ロボットへ送信 ----
-                left_hand_cam  = normalized_to_camera(left_hand_norm, pose)
-                right_hand_cam = normalized_to_camera(right_hand_norm, pose)
+                left_hand_cam  = normalized_to_camera(lh0, pose)
+                right_hand_cam = normalized_to_camera(rh0, pose)
                 if not args.no_robot:
                     grasp_pose = GraspPose(
                         left_hand=left_hand_cam,
@@ -579,6 +584,7 @@ def run_full(config: dict, args):
         print("\n[main] 中断されました。")
     finally:
         camera.stop()
+        o3d_vis.destroy()
         if not args.no_robot:
             robot.disconnect()
 
