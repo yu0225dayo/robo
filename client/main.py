@@ -316,8 +316,8 @@ def run_full(config: dict, args):
     フルパイプライン (カメラ起動から把持まで一連で実行)
 
     操作:
-        [c] 物体をクリックして選択 → 3D mesh 生成
-        [g] pose 推定 → 把持姿勢生成 → 画像投影 ([c] 済みが必要)
+        [c] 物体をクリック選択 → mesh生成 → 3D点群表示
+        [g] pose推定 → 把持生成 → 画像保存 → ロボット送信 (自動, [c]後に有効)
         [q] 終了
     """
     import cv2 as _cv2
@@ -399,15 +399,15 @@ def run_full(config: dict, args):
     fig, ax = live_visualize_setup()
 
     # 状態変数
-    mesh_pts      = None   # (N, 3) mesh 点群
-    mesh_pts_norm = None   # unit sphere 正規化済み
+    mesh_pts      = None
+    mesh_pts_norm = None
     click_x = click_y = -1
-    rgb_frozen   = None    # [c] 時点で固定したフレーム
+    rgb_frozen   = None
     depth_frozen = None
 
     print("\n[操作方法]")
-    print("  [c] 物体をクリック選択 → 3D mesh 生成")
-    print("  [g] pose 推定 → 把持姿勢生成 ([c] 実行後に有効)")
+    print("  [c] 物体をクリック選択 → mesh生成 → 3D点群表示")
+    print("  [g] pose推定 → 把持生成 → 画像保存 (自動, [c]後に有効)")
     print("  [q] 終了")
     print("=" * 50)
 
@@ -415,8 +415,7 @@ def run_full(config: dict, args):
         while True:
             rgb, depth, _ = camera.capture()
 
-            # mesh 生成済みかどうかをプレビューに表示
-            status = "mesh: OK  [g]で把持" if mesh_pts is not None else "mesh: なし  [c]で物体選択"
+            status = "[g]で把持生成" if mesh_pts is not None else "[c]で物体選択"
             preview = rgb.copy()
             _cv2.putText(preview, status, (10, 30),
                          _cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -438,8 +437,18 @@ def run_full(config: dict, args):
                 )
                 mesh_pts      = load_pointcloud_ply(mesh_path, target_points=2048)
                 mesh_pts_norm = normalize_pointcloud(mesh_pts)
-                print(f"[mesh生成完了] {mesh_path}  クリック座標: ({click_x}, {click_y})")
-                print("[次のステップ] [g] を押して把持姿勢を生成してください。")
+                print(f"[mesh生成完了] {mesh_path}")
+
+                # 3D 点群のみ表示
+                ax.cla()
+                ax.set_title("Reference Mesh")
+                ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
+                ax.set_axis_off()
+                ax.scatter(mesh_pts_norm[:, 0], mesh_pts_norm[:, 1], mesh_pts_norm[:, 2],
+                           c="green", s=3)
+                fig.canvas.draw_idle()
+                fig.canvas.flush_events()
+                print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
                 if mesh_pts is None or rgb_frozen is None:
@@ -449,79 +458,67 @@ def run_full(config: dict, args):
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
 
-                # ---- pose 推定 ([c] 時点のフレームを使用) ----
+                # ---- pose 推定 ----
                 print("\n" + "=" * 50)
-                print("[pose推定] SAM-6D で 6DoF pose 推定中...")
+                print("[Step 1] SAM-6D で 6DoF pose 推定中...")
                 print("=" * 50)
-
                 R, t, img_pose, img_mesh = client.estimate_pose(
                     rgb_frozen, depth_frozen, intrinsics,
                     click_x=click_x, click_y=click_y,
                 )
-
-                if img_pose is not None:
-                    path = os.path.join(out_dir, "server_pointcloud.png")
-                    _cv2.imwrite(path, img_pose)
-                    _cv2.imshow("Server: Pointcloud Projection", img_pose)
-                    _cv2.waitKey(1)
-                    print(f"[投影] 点群投影画像: {path}")
-
                 if img_mesh is not None:
-                    path = os.path.join(out_dir, "server_mesh.png")
-                    _cv2.imwrite(path, img_mesh)
-                    _cv2.imshow("Server: Mesh Projection", img_mesh)
-                    _cv2.waitKey(1)
-                    print(f"[投影] メッシュ投影画像: {path}")
+                    _cv2.imwrite(os.path.join(out_dir, "pose.png"), img_mesh)
+                    _cv2.imshow("pose", img_mesh); _cv2.waitKey(1)
+                if img_pose is not None:
+                    _cv2.imwrite(os.path.join(out_dir, "pose_pointcloud.png"), img_pose)
+                    _cv2.imshow("pose_pointcloud", img_pose); _cv2.waitKey(1)
 
-                # スケール推定
                 mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
                 mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
                 scale = estimate_scale_from_depth(
-                    depth, mask_u, mask_v, intrinsics, mesh_pts_norm
+                    depth_frozen, mask_u, mask_v, intrinsics, mesh_pts_norm
                 )
                 pose = ObjectPose(center_3d=t, scale=scale, R=R)
 
                 # ---- 把持姿勢生成 ----
                 print("\n" + "=" * 50)
-                print("[把持生成] Shape2Gesture で把持姿勢を生成中...")
+                print("[Step 2] Shape2Gesture で把持姿勢を生成中...")
                 print("=" * 50)
-
                 grasp_results = generator.generate(
-                    mesh_pts,
-                    num_samples=model_cfg["num_samples"],
+                    mesh_pts, num_samples=model_cfg["num_samples"]
                 )
-
                 norm_pts, seg_labels = generator.get_segmentation(mesh_pts)
-
-                if vis_cfg["show_all_samples"] and len(grasp_results) > 1:
-                    visualize_multiple_grasps(
-                        norm_pts, grasp_results,
-                        labels=seg_labels if vis_cfg["show_segmentation"] else None,
-                    )
-
                 left_hand_norm, right_hand_norm = grasp_results[0]
                 live_visualize_update(
                     fig, ax, norm_pts, left_hand_norm, right_hand_norm,
                     labels=seg_labels if vis_cfg["show_segmentation"] else None,
                 )
 
-                # ---- 点群画像の上に把持姿勢を投影して保存・表示 ----
-                base = img_pose if img_pose is not None else rgb
+                # ---- RGB 画像に把持姿勢を投影 ----
                 grasp_img = project_hands_on_image(
-                    base, left_hand_norm, right_hand_norm,
-                    object_pose=pose,
-                    intrinsics=intrinsics,
+                    rgb_frozen, left_hand_norm, right_hand_norm,
+                    object_pose=pose, intrinsics=intrinsics,
                 )
-                grasp_path = os.path.join(out_dir, "pointcloud_w_grasp.png")
-                _cv2.imwrite(grasp_path, grasp_img)
-                _cv2.imshow("pointcloud_w_grasp", grasp_img)
-                _cv2.waitKey(1)
-                print(f"[投影結果] {out_dir} に保存しました。")
+                _cv2.imwrite(os.path.join(out_dir, "rgb_w_grasp.png"), grasp_img)
+                _cv2.imshow("rgb_w_grasp", grasp_img); _cv2.waitKey(1)
+
+                # ズーム版: 物体中心周辺をクロップして元サイズに拡大
+                h_img, w_img = grasp_img.shape[:2]
+                u_c = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
+                v_c = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
+                r = max(80, int(intrinsics.fx * 0.15 / max(t[2], 0.01) * 2.0))
+                crop = grasp_img[max(0, v_c-r):min(h_img, v_c+r),
+                                 max(0, u_c-r):min(w_img, u_c+r)]
+                if crop.size > 0:
+                    zoom_img = _cv2.resize(crop, (w_img, h_img), interpolation=_cv2.INTER_LINEAR)
+                    _cv2.imwrite(os.path.join(out_dir, "rgb_w_grasp_zoom.png"), zoom_img)
+                    _cv2.imshow("rgb_w_grasp_zoom", zoom_img); _cv2.waitKey(1)
+
+                print(f"[完了] 出力: {out_dir}")
 
                 # ---- ロボットへ送信 ----
                 left_hand_cam  = normalized_to_camera(left_hand_norm, pose)
                 right_hand_cam = normalized_to_camera(right_hand_norm, pose)
-
                 if not args.no_robot:
                     grasp_pose = GraspPose(
                         left_hand=left_hand_cam,
@@ -535,7 +532,7 @@ def run_full(config: dict, args):
                 else:
                     print("[main] --no-robot: ロボット送信をスキップ")
 
-                # 処理完了 → フレームをリセットして次の物体選択へ
+                # リセット → 次の物体選択へ
                 rgb_frozen = depth_frozen = None
                 mesh_pts = mesh_pts_norm = None
                 print("\n[完了] 次の物体を選択するには [c] を押してください。")
