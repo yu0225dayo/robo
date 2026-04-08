@@ -347,7 +347,8 @@ def run_full(config: dict, args):
     from pipeline.robot_interface import RobotInterface, GraspPose
     from utils.visualization import (
         Open3DGraspVisualizer, save_grasp_figure,
-        visualize_multiple_grasps, project_hands_on_image, show_figure,
+        live_visualize_setup, show_figure,
+        visualize_multiple_grasps, project_hands_on_image,
     )
     from utils.coord_transform import (
         CameraIntrinsics, ObjectPose, normalized_to_camera,
@@ -414,6 +415,7 @@ def run_full(config: dict, args):
         width=cam_cfg["width"], height=cam_cfg["height"],
     )
 
+    fig, ax = live_visualize_setup()
     o3d_vis = Open3DGraspVisualizer()
 
     # 状態変数
@@ -458,10 +460,17 @@ def run_full(config: dict, args):
                 mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
                 print(f"[mesh生成完了] {mesh_path}  scale={mesh_scale_m:.4f} m")
 
-                # 3D 点群のみ表示 (ダウンサンプリング)
+                # 3D 点群のみ表示 (matplotlib, ダウンサンプリング)
                 _vis_n = min(512, len(mesh_pts_norm))
                 _vis_idx = np.random.choice(len(mesh_pts_norm), _vis_n, replace=False)
-                o3d_vis.update_pointcloud(mesh_pts_norm[_vis_idx])
+                ax.cla()
+                ax.set_title("Reference Mesh")
+                ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
+                ax.set_axis_off()
+                ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1],
+                           mesh_pts_norm[_vis_idx, 2], c="green", s=3)
+                show_figure(fig)
+                _cv2.waitKey(1)
                 print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
@@ -482,10 +491,17 @@ def run_full(config: dict, args):
                     mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
                     print(f"[mesh生成完了] {mesh_path}  scale={mesh_scale_m:.4f} m")
 
-                    # 3D 点群を表示 (ダウンサンプリング)
+                    # 3D 点群を表示 (matplotlib, ダウンサンプリング)
                     _vis_n = min(512, len(mesh_pts_norm))
                     _vis_idx = np.random.choice(len(mesh_pts_norm), _vis_n, replace=False)
-                    o3d_vis.update_pointcloud(mesh_pts_norm[_vis_idx])
+                    ax.cla()
+                    ax.set_title("Reference Mesh")
+                    ax.set_xlim(-1.2, 1.2); ax.set_ylim(-1.2, 1.2); ax.set_zlim(-1.2, 1.2)
+                    ax.set_axis_off()
+                    ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1],
+                               mesh_pts_norm[_vis_idx, 2], c="green", s=3)
+                    show_figure(fig)
+                    _cv2.waitKey(1)
 
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
