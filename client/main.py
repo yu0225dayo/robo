@@ -520,9 +520,14 @@ def run_full(config: dict, args):
                     rgb_frozen   = rgb.copy()
                     depth_frozen = depth.copy()
                     os.makedirs(os.path.dirname(os.path.abspath(mesh_path)), exist_ok=True)
-                    _, click_x, click_y, mask_img = client.save_reference_mesh_interactive(
-                        rgb_frozen, mesh_path, mesh_method=mesh_method
-                    )
+                    try:
+                        _, click_x, click_y, mask_img = client.save_reference_mesh_interactive(
+                            rgb_frozen, mesh_path, mesh_method=mesh_method
+                        )
+                    except KeyboardInterrupt:
+                        print("[キャンセル] 物体選択をキャンセルしました。")
+                        rgb_frozen = depth_frozen = None
+                        continue
                     mesh_pts      = load_pointcloud_ply(mesh_path, target_points=2048)
                     mesh_pts_norm = normalize_pointcloud(mesh_pts)
                     _centered = mesh_pts - mesh_pts.mean(axis=0)
