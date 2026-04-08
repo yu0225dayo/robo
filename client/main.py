@@ -402,6 +402,8 @@ def run_full(config: dict, args):
     mesh_pts      = None   # (N, 3) mesh 点群
     mesh_pts_norm = None   # unit sphere 正規化済み
     click_x = click_y = -1
+    rgb_frozen   = None    # [c] 時点で固定したフレーム
+    depth_frozen = None
 
     print("\n[操作方法]")
     print("  [c] 物体をクリック選択 → 3D mesh 生成")
@@ -424,13 +426,15 @@ def run_full(config: dict, args):
                 break
 
             elif key == ord("c"):
-                # ---- mesh 生成 ----
+                # ---- フレーム固定 + mesh 生成 ----
                 print("\n" + "=" * 50)
                 print("[mesh生成] 物体をクリックして選択してください...")
                 print("=" * 50)
+                rgb_frozen   = rgb.copy()
+                depth_frozen = depth.copy()
                 os.makedirs(os.path.dirname(os.path.abspath(mesh_path)), exist_ok=True)
                 _, click_x, click_y = client.save_reference_mesh_interactive(
-                    rgb, mesh_path, mesh_method=mesh_method
+                    rgb_frozen, mesh_path, mesh_method=mesh_method
                 )
                 mesh_pts      = load_pointcloud_ply(mesh_path, target_points=2048)
                 mesh_pts_norm = normalize_pointcloud(mesh_pts)
@@ -438,20 +442,20 @@ def run_full(config: dict, args):
                 print("[次のステップ] [g] を押して把持姿勢を生成してください。")
 
             elif key == ord("g"):
-                if mesh_pts is None:
+                if mesh_pts is None or rgb_frozen is None:
                     print("[警告] 先に [c] で mesh を生成してください。")
                     continue
 
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
 
-                # ---- pose 推定 ----
+                # ---- pose 推定 ([c] 時点のフレームを使用) ----
                 print("\n" + "=" * 50)
                 print("[pose推定] SAM-6D で 6DoF pose 推定中...")
                 print("=" * 50)
 
                 R, t, img_pose, img_mesh = client.estimate_pose(
-                    rgb, depth, intrinsics,
+                    rgb_frozen, depth_frozen, intrinsics,
                     click_x=click_x, click_y=click_y,
                 )
 
@@ -530,6 +534,11 @@ def run_full(config: dict, args):
                     print(f"[Robot] 結果: {result}")
                 else:
                     print("[main] --no-robot: ロボット送信をスキップ")
+
+                # 処理完了 → フレームをリセットして次の物体選択へ
+                rgb_frozen = depth_frozen = None
+                mesh_pts = mesh_pts_norm = None
+                print("\n[完了] 次の物体を選択するには [c] を押してください。")
 
     except KeyboardInterrupt:
         print("\n[main] 中断されました。")
