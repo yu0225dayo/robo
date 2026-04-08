@@ -5,6 +5,7 @@ matplotlib を用いた3D可視化と、
 open3d を用いたインタラクティブ可視化を提供する。
 """
 
+import threading
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -302,69 +303,17 @@ def save_grasp_figure(
     plt.close(fig)
 
 
-class Open3DGraspVisualizer:
+class MatplotlibGraspVisualizer:
     """
-    open3d を使ったインタラクティブ3D可視化
+    matplotlib 3D をインタラクティブ表示する (マウスで回転・拡大縮小可能)
 
-    マウスで回転・拡大縮小・移動できる。
-    メインループから毎フレーム poll() を呼ぶことで cv2 ウィンドウと共存できる。
+    Tk ウィンドウを別スレッドで起動するため、cv2 のメインループをブロックしない。
+    poll() は不要。
     """
 
     def __init__(self):
-        self._vis = None
-        self._first = True
-
-    def setup(self, title: str = "Grasp 3D"):
-        try:
-            import open3d as o3d
-            self._vis = o3d.visualization.Visualizer()
-            self._vis.create_window(window_name=title, width=700, height=700)
-            self._first = True
-        except Exception as e:
-            print(f"[Open3DVisualizer] 初期化失敗: {e}")
-            self._vis = None
-
-    # ------------------------------------------------------------------
-
-    def _make_pcd(self, points: np.ndarray, labels=None):
-        import open3d as o3d
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points.astype(np.float64))
-        if labels is not None:
-            colors = np.zeros((len(points), 3), dtype=np.float64)
-            colors[labels == 0] = [0.0, 1.0, 0.0]
-            colors[labels == 1] = [0.0, 0.0, 1.0]
-            colors[labels == 2] = [1.0, 0.0, 0.0]
-            pcd.colors = o3d.utility.Vector3dVector(colors)
-        else:
-            pcd.paint_uniform_color([0.0, 1.0, 0.0])
-        return pcd
-
-    def _make_hand_ls(self, hand: np.ndarray, color):
-        import open3d as o3d
-        ls = o3d.geometry.LineSet()
-        ls.points = o3d.utility.Vector3dVector(hand.astype(np.float64))
-        ls.lines = o3d.utility.Vector2iVector(list(HAND_CONNECTIONS))
-        ls.colors = o3d.utility.Vector3dVector([color] * len(HAND_CONNECTIONS))
-        return ls
-
-    # ------------------------------------------------------------------
-
-    def update_pointcloud(self, points: np.ndarray, labels=None):
-        """点群のみ更新表示"""
-        if self._vis is None:
-            self.setup("Reference Mesh")
-        if self._vis is None:
-            return
-        try:
-            self._vis.clear_geometries()
-            self._vis.add_geometry(self._make_pcd(points, labels))
-            if self._first:
-                self._vis.reset_view_point(True)
-                self._first = False
-            self.poll()
-        except Exception as e:
-            print(f"[Open3DVisualizer] update_pointcloud 失敗: {e}")
+        self._thread = None
+        self._stop_event = threading.Event()
 
     def update(
         self,
@@ -372,40 +321,84 @@ class Open3DGraspVisualizer:
         left_hand: np.ndarray,
         right_hand: np.ndarray,
         labels=None,
+        title: str = "Grasp 3D",
     ):
-        """点群 + 把持姿勢を更新表示"""
-        if self._vis is None:
-            self.setup("Grasp 3D")
-        if self._vis is None:
-            return
-        try:
-            self._vis.clear_geometries()
-            self._vis.add_geometry(self._make_pcd(points, labels))
-            self._vis.add_geometry(self._make_hand_ls(left_hand,  [1.0, 0.5, 0.0]))
-            self._vis.add_geometry(self._make_hand_ls(right_hand, [0.5, 0.0, 1.0]))
-            if self._first:
-                self._vis.reset_view_point(True)
-                self._first = False
-            self.poll()
-        except Exception as e:
-            print(f"[Open3DVisualizer] update 失敗: {e}")
+        """点群 + 把持姿勢を新しい Tk ウィンドウで表示する"""
+        # 前のウィンドウを閉じる
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+        self._stop_event = threading.Event()
+
+        # スレッドに渡すデータをコピー
+        pts = points.copy()
+        lh  = left_hand.copy()
+        rh  = right_hand.copy()
+        lb  = labels.copy() if labels is not None else None
+        stop_ev = self._stop_event
+
+        def _run():
+            import tkinter as tk
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import (
+                FigureCanvasTkAgg, NavigationToolbar2Tk,
+            )
+
+            root = tk.Tk()
+            root.title(title)
+
+            fig = Figure(figsize=(7, 7))
+            ax  = fig.add_subplot(111, projection="3d")
+            ax.set_xlim(-1.2, 1.2)
+            ax.set_ylim(-1.2, 1.2)
+            ax.set_zlim(-1.2, 1.2)
+            ax.set_axis_off()
+
+            # 点群
+            if lb is not None:
+                for lbl, col in [(0, "green"), (1, "blue"), (2, "red")]:
+                    mask = lb == lbl
+                    if mask.sum() > 0:
+                        ax.scatter(pts[mask, 0], pts[mask, 1], pts[mask, 2],
+                                   c=col, s=3)
+            else:
+                ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c="green", s=3)
+
+            # 手スケルトン
+            for hand, col in [(lh, "orange"), (rh, "purple")]:
+                hx, hy, hz = hand[:, 0], hand[:, 1], hand[:, 2]
+                for p_idx, c_idx in HAND_CONNECTIONS:
+                    ax.plot([hx[p_idx], hx[c_idx]],
+                            [hy[p_idx], hy[c_idx]],
+                            [hz[p_idx], hz[c_idx]], c=col)
+
+            canvas = FigureCanvasTkAgg(fig, master=root)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            toolbar = NavigationToolbar2Tk(canvas, root)
+            toolbar.update()
+
+            # stop_event が立ったらウィンドウを閉じるポーリング
+            def _check_stop():
+                if stop_ev.is_set():
+                    root.destroy()
+                else:
+                    root.after(100, _check_stop)
+
+            root.after(100, _check_stop)
+            root.mainloop()
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
 
     def poll(self):
-        """イベント処理 (メインループから毎フレーム呼ぶ)"""
-        if self._vis:
-            try:
-                self._vis.poll_events()
-                self._vis.update_renderer()
-            except Exception:
-                self._vis = None
+        """互換用 (何もしない)"""
+        pass
 
     def destroy(self):
-        if self._vis:
-            try:
-                self._vis.destroy_window()
-            except Exception:
-                pass
-            self._vis = None
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
 from utils.coord_transform import CameraIntrinsics, ObjectPose, normalized_to_camera, project_to_image
 
 # 手スケルトン: Shape2Gestureの関節定義に基づく接続リスト

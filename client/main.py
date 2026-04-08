@@ -346,7 +346,7 @@ def run_full(config: dict, args):
     from pipeline.grasp_generator import GraspGenerator
     from pipeline.robot_interface import RobotInterface, GraspPose
     from utils.visualization import (
-        Open3DGraspVisualizer, save_grasp_figure,
+        MatplotlibGraspVisualizer, save_grasp_figure,
         live_visualize_setup, show_figure,
         visualize_multiple_grasps, project_hands_on_image,
     )
@@ -416,7 +416,7 @@ def run_full(config: dict, args):
     )
 
     fig, ax = live_visualize_setup()
-    o3d_vis = Open3DGraspVisualizer()
+    o3d_vis = MatplotlibGraspVisualizer()
 
     # 状態変数
     mesh_pts      = None
