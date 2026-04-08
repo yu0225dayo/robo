@@ -239,8 +239,7 @@ def live_visualize_update(
     draw_hand(left_hand, ax, color="orange")
     draw_hand(right_hand, ax, color="purple")
 
-    fig.canvas.draw_idle()
-    fig.canvas.flush_events()
+    plt.pause(0.001)
 
 
 # ============================================================

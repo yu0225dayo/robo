@@ -31,6 +31,7 @@ import yaml
 import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
 
 
 def load_config(config_path: str) -> dict:
@@ -448,8 +449,7 @@ def run_full(config: dict, args):
                 ax.set_axis_off()
                 ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                            c="green", s=3)
-                fig.canvas.draw_idle()
-                fig.canvas.flush_events()
+                plt.pause(0.001)
                 print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
