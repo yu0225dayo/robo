@@ -136,10 +136,9 @@ def run_online(config: dict, args):
         visualize_multiple_grasps, project_hands_on_image,
     )
     from utils.coord_transform import (
-        CameraIntrinsics, ObjectPose,
-        estimate_scale_from_depth, project_to_image, normalized_to_camera,
+        CameraIntrinsics, ObjectPose, normalized_to_camera,
     )
-    from utils.pointcloud_utils import load_pointcloud_ply, normalize_pointcloud
+    from utils.pointcloud_utils import load_pointcloud_ply
 
     cam_cfg   = config["camera"]
     sam_cfg   = config["sam3d"]
@@ -171,9 +170,12 @@ def run_online(config: dict, args):
     template_dir     = args.template_dir or ""
     client.load_reference_mesh(args.mesh, server_mesh_path, template_dir)
 
-    # reference mesh の点群を読み込み (GraspGenerator 入力 + スケール推定)
+    # reference mesh の点群を読み込み + スケール計算
     mesh_pts = load_pointcloud_ply(args.mesh, target_points=2048)
-    mesh_pts_norm = normalize_pointcloud(mesh_pts)  # unit sphere (スケール推定用)
+    # PLY は mm 単位。正規化半径 (mm) / 1000 → メートルスケール
+    _centered = mesh_pts - mesh_pts.mean(axis=0)
+    mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
+    print(f"[CoordTransform] mesh_scale_m={mesh_scale_m:.4f} m")
 
     # ロボット
     mode = robot_cfg["mode"]
@@ -254,16 +256,8 @@ def run_online(config: dict, args):
                     _cv2.waitKey(1)
                     print(f"[投影] 点群投影: {path}")
 
-                # mask_u, mask_v: スケール推定用 (tの投影)
-                mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
-                mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
-
-                scale = estimate_scale_from_depth(
-                    depth, mask_u, mask_v, intrinsics, mesh_pts_norm
-                )
-
                 # 6DoF pose オブジェクト (R, t, scale)
-                pose = ObjectPose(center_3d=t, scale=scale, R=R)
+                pose = ObjectPose(center_3d=t, scale=mesh_scale_m, R=R)
 
                 # ---- Step 3: Shape2Gesture で把持姿勢生成 ----
                 print("\n" + "=" * 50)
@@ -314,7 +308,7 @@ def run_online(config: dict, args):
                     grasp_pose = GraspPose(
                         left_hand=left_hand_cam,
                         right_hand=right_hand_cam,
-                        object_scale=scale,
+                        object_scale=mesh_scale_m,
                         object_center=t,
                     )
                     robot.send_grasp_pose(grasp_pose, execute=robot_cfg["execute"])
@@ -355,8 +349,7 @@ def run_full(config: dict, args):
         visualize_multiple_grasps, project_hands_on_image,
     )
     from utils.coord_transform import (
-        CameraIntrinsics, ObjectPose,
-        estimate_scale_from_depth, normalized_to_camera,
+        CameraIntrinsics, ObjectPose, normalized_to_camera,
     )
     from utils.pointcloud_utils import load_pointcloud_ply, normalize_pointcloud
 
@@ -459,7 +452,9 @@ def run_full(config: dict, args):
                 )
                 mesh_pts      = load_pointcloud_ply(mesh_path, target_points=2048)
                 mesh_pts_norm = normalize_pointcloud(mesh_pts)
-                print(f"[mesh生成完了] {mesh_path}")
+                _centered = mesh_pts - mesh_pts.mean(axis=0)
+                mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
+                print(f"[mesh生成完了] {mesh_path}  scale={mesh_scale_m:.4f} m")
 
                 # 3D 点群のみ表示 (ダウンサンプリング)
                 _vis_n = min(512, len(mesh_pts_norm))
@@ -487,7 +482,9 @@ def run_full(config: dict, args):
                     )
                     mesh_pts      = load_pointcloud_ply(mesh_path, target_points=2048)
                     mesh_pts_norm = normalize_pointcloud(mesh_pts)
-                    print(f"[mesh生成完了] {mesh_path}")
+                    _centered = mesh_pts - mesh_pts.mean(axis=0)
+                    mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
+                    print(f"[mesh生成完了] {mesh_path}  scale={mesh_scale_m:.4f} m")
 
                     # 3D 点群を表示 (ダウンサンプリング)
                     _vis_n = min(512, len(mesh_pts_norm))
@@ -498,8 +495,7 @@ def run_full(config: dict, args):
                     ax.set_axis_off()
                     ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                                c="green", s=3)
-                    fig.canvas.draw_idle()
-                    fig.canvas.flush_events()
+                    plt.pause(0.001)
 
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
@@ -519,12 +515,7 @@ def run_full(config: dict, args):
                     _cv2.imwrite(os.path.join(out_dir, "pose_pointcloud.png"), img_pose)
                     _cv2.imshow("pose_pointcloud", img_pose); _cv2.waitKey(1)
 
-                mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
-                mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
-                scale = estimate_scale_from_depth(
-                    depth_frozen, mask_u, mask_v, intrinsics, mesh_pts_norm
-                )
-                pose = ObjectPose(center_3d=t, scale=scale, R=R)
+                pose = ObjectPose(center_3d=t, scale=mesh_scale_m, R=R)
 
                 # ---- 把持姿勢生成 ----
                 print("\n" + "=" * 50)
@@ -561,7 +552,7 @@ def run_full(config: dict, args):
                     grasp_pose = GraspPose(
                         left_hand=left_hand_cam,
                         right_hand=right_hand_cam,
-                        object_scale=scale,
+                        object_scale=mesh_scale_m,
                         object_center=t,
                     )
                     robot.send_grasp_pose(grasp_pose, execute=robot_cfg["execute"])
