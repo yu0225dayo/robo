@@ -216,19 +216,19 @@ def run_online(config: dict, args):
                 )
 
                 # サーバから受信した投影画像を保存・表示
-                if img_pose is not None:
-                    path = os.path.join(out_dir, "server_pointcloud.png")
-                    _cv2.imwrite(path, img_pose)
-                    _cv2.imshow("Server: Pointcloud Projection", img_pose)
-                    _cv2.waitKey(1)
-                    print(f"[投影] 点群投影画像: {path}")
-
                 if img_mesh is not None:
-                    path = os.path.join(out_dir, "server_mesh.png")
+                    path = os.path.join(out_dir, "pose.png")
                     _cv2.imwrite(path, img_mesh)
-                    _cv2.imshow("Server: Mesh Projection", img_mesh)
+                    _cv2.imshow("pose", img_mesh)
                     _cv2.waitKey(1)
-                    print(f"[投影] メッシュ投影画像: {path}")
+                    print(f"[投影] メッシュ投影: {path}")
+
+                if img_pose is not None:
+                    path = os.path.join(out_dir, "pose_pointcloud.png")
+                    _cv2.imwrite(path, img_pose)
+                    _cv2.imshow("pose_pointcloud", img_pose)
+                    _cv2.waitKey(1)
+                    print(f"[投影] 点群投影: {path}")
 
                 # mask_u, mask_v: スケール推定用 (tの投影)
                 mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
@@ -265,20 +265,18 @@ def run_online(config: dict, args):
                     labels=seg_labels if vis_cfg["show_segmentation"] else None,
                 )
 
-                # ---- Step 4: 把持姿勢をカメラ画像に投影して保存・表示 ----
-                for i, (lh_norm, rh_norm) in enumerate(grasp_results):
-                    result_img = project_hands_on_image(
-                        rgb, lh_norm, rh_norm,
-                        object_pose=pose,
-                        intrinsics=intrinsics,
-                    )
-                    save_path = os.path.join(out_dir, f"grasp_{i:02d}.png")
-                    _cv2.imwrite(save_path, result_img)
-
-                print(f"[投影結果] {len(grasp_results)}枚を {out_dir} に保存しました。")
-                _cv2.imshow("Grasp Projection",
-                            _cv2.imread(os.path.join(out_dir, "grasp_00.png")))
+                # ---- Step 4: 点群画像の上に把持姿勢を投影して保存・表示 ----
+                base = img_pose if img_pose is not None else rgb
+                grasp_img = project_hands_on_image(
+                    base, left_hand_norm, right_hand_norm,
+                    object_pose=pose,
+                    intrinsics=intrinsics,
+                )
+                grasp_path = os.path.join(out_dir, "pointcloud_w_grasp.png")
+                _cv2.imwrite(grasp_path, grasp_img)
+                _cv2.imshow("pointcloud_w_grasp", grasp_img)
                 _cv2.waitKey(1)
+                print(f"[投影結果] {out_dir} に保存しました。")
 
                 # ---- Step 5: ロボットへ送信 ----
                 print("\n" + "=" * 50)
@@ -503,20 +501,18 @@ def run_full(config: dict, args):
                     labels=seg_labels if vis_cfg["show_segmentation"] else None,
                 )
 
-                # ---- 画像投影・保存 ----
-                for i, (lh_norm, rh_norm) in enumerate(grasp_results):
-                    result_img = project_hands_on_image(
-                        rgb, lh_norm, rh_norm,
-                        object_pose=pose,
-                        intrinsics=intrinsics,
-                    )
-                    save_path = os.path.join(out_dir, f"grasp_{i:02d}.png")
-                    _cv2.imwrite(save_path, result_img)
-
-                print(f"[投影結果] {len(grasp_results)}枚を {out_dir} に保存しました。")
-                _cv2.imshow("Grasp Projection",
-                            _cv2.imread(os.path.join(out_dir, "grasp_00.png")))
+                # ---- 点群画像の上に把持姿勢を投影して保存・表示 ----
+                base = img_pose if img_pose is not None else rgb
+                grasp_img = project_hands_on_image(
+                    base, left_hand_norm, right_hand_norm,
+                    object_pose=pose,
+                    intrinsics=intrinsics,
+                )
+                grasp_path = os.path.join(out_dir, "pointcloud_w_grasp.png")
+                _cv2.imwrite(grasp_path, grasp_img)
+                _cv2.imshow("pointcloud_w_grasp", grasp_img)
                 _cv2.waitKey(1)
+                print(f"[投影結果] {out_dir} に保存しました。")
 
                 # ---- ロボットへ送信 ----
                 left_hand_cam  = normalized_to_camera(left_hand_norm, pose)
