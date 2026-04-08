@@ -182,7 +182,7 @@ def visualize_multiple_grasps(
         draw_hand(right_hand, ax, color="purple")
 
     plt.tight_layout()
-    show_figure(fig, "Grasp Candidates")
+    show_figure(fig)
     plt.close(fig)
 
 
@@ -212,6 +212,7 @@ def live_visualize_update(
     right_hand: np.ndarray,
     labels: np.ndarray = None,
     title: str = "RealSense → SAM3D → Shape2Gesture",
+    save_path: str = None,
 ):
     """
     リアルタイム表示を更新する
@@ -238,7 +239,7 @@ def live_visualize_update(
     draw_hand(left_hand, ax, color="orange")
     draw_hand(right_hand, ax, color="purple")
 
-    show_figure(fig, "Grasp Visualization")
+    show_figure(fig, save_path=save_path)
 
 
 # ============================================================
@@ -257,12 +258,15 @@ def _render_fig(fig) -> np.ndarray:
     return _cv2.imdecode(np.frombuffer(buf.getvalue(), np.uint8), _cv2.IMREAD_COLOR)
 
 
-def show_figure(fig, window_name: str = "Visualization"):
-    """matplotlib figure を cv2 ウィンドウに表示"""
+def show_figure(fig, save_path: str = None):
+    """matplotlib figure を PNG ファイルに保存して cv2 で表示 (waitKey なし)"""
     img = _render_fig(fig)
-    if img is not None:
-        _cv2.imshow(window_name, img)
-        _cv2.waitKey(1)
+    if img is None:
+        return
+    if save_path:
+        _cv2.imwrite(save_path, img)
+    _cv2.imshow("Visualization", img)
+    # waitKey はメインループの show_preview に任せる (ここでは呼ばない)
 from utils.coord_transform import CameraIntrinsics, ObjectPose, normalized_to_camera, project_to_image
 
 # 手スケルトン: Shape2Gestureの関節定義に基づく接続リスト

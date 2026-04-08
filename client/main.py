@@ -466,7 +466,7 @@ def run_full(config: dict, args):
                 ax.set_axis_off()
                 ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                            c="green", s=3)
-                show_figure(fig, "Reference Mesh")
+                show_figure(fig)
                 print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
@@ -496,7 +496,7 @@ def run_full(config: dict, args):
                     ax.set_axis_off()
                     ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                                c="green", s=3)
-                    show_figure(fig, "Reference Mesh")
+                    show_figure(fig)
 
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)
@@ -542,6 +542,7 @@ def run_full(config: dict, args):
                 live_visualize_update(
                     fig, ax, _vis_pts, left_hand_norm, right_hand_norm,
                     labels=_vis_labels if vis_cfg["show_segmentation"] else None,
+                    save_path=os.path.join(out_dir, "grasp_3d.png"),
                 )
 
                 # ---- RGB 画像に把持姿勢を投影 ----
