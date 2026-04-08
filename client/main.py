@@ -30,7 +30,7 @@ import sys
 import yaml
 import numpy as np
 import matplotlib
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -133,7 +133,7 @@ def run_online(config: dict, args):
     from pipeline.robot_interface import RobotInterface, GraspPose
     from utils.visualization import (
         live_visualize_setup, live_visualize_update,
-        visualize_multiple_grasps, project_hands_on_image,
+        visualize_multiple_grasps, project_hands_on_image, show_figure,
     )
     from utils.coord_transform import (
         CameraIntrinsics, ObjectPose, normalized_to_camera,
@@ -347,7 +347,7 @@ def run_full(config: dict, args):
     from pipeline.robot_interface import RobotInterface, GraspPose
     from utils.visualization import (
         live_visualize_setup, live_visualize_update,
-        visualize_multiple_grasps, project_hands_on_image,
+        visualize_multiple_grasps, project_hands_on_image, show_figure,
     )
     from utils.coord_transform import (
         CameraIntrinsics, ObjectPose, normalized_to_camera,
@@ -466,7 +466,7 @@ def run_full(config: dict, args):
                 ax.set_axis_off()
                 ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                            c="green", s=3)
-                plt.pause(0.001)
+                show_figure(fig, "Reference Mesh")
                 print("[次のステップ] [g] を押してください。")
 
             elif key == ord("g"):
@@ -496,7 +496,7 @@ def run_full(config: dict, args):
                     ax.set_axis_off()
                     ax.scatter(mesh_pts_norm[_vis_idx, 0], mesh_pts_norm[_vis_idx, 1], mesh_pts_norm[_vis_idx, 2],
                                c="green", s=3)
-                    plt.pause(0.001)
+                    show_figure(fig, "Reference Mesh")
 
                 out_dir = os.path.join("output", datetime.now().strftime("%Y%m%d_%H%M%S"))
                 os.makedirs(out_dir, exist_ok=True)

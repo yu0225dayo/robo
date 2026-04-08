@@ -182,7 +182,8 @@ def visualize_multiple_grasps(
         draw_hand(right_hand, ax, color="purple")
 
     plt.tight_layout()
-    plt.show(block=True)
+    show_figure(fig, "Grasp Candidates")
+    plt.close(fig)
 
 
 def live_visualize_setup():
@@ -192,7 +193,6 @@ def live_visualize_setup():
     Returns:
         (fig, ax) matplotlib オブジェクト
     """
-    plt.ion()
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection="3d")
     ax.set_title("RealSense → SAM3D → Shape2Gesture")
@@ -201,7 +201,6 @@ def live_visualize_setup():
     ax.set_zlim(-1.2, 1.2)
     ax.set_axis_off()
     plt.tight_layout()
-    plt.show(block=False)
     return fig, ax
 
 
@@ -239,14 +238,31 @@ def live_visualize_update(
     draw_hand(left_hand, ax, color="orange")
     draw_hand(right_hand, ax, color="purple")
 
-    plt.pause(0.001)
+    show_figure(fig, "Grasp Visualization")
 
 
 # ============================================================
 # カメラ画像への手形状投影
 # ============================================================
 
+import io
 import cv2 as _cv2
+
+
+def _render_fig(fig) -> np.ndarray:
+    """Agg バックエンドで figure を BGR numpy array に変換"""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=80, bbox_inches="tight")
+    buf.seek(0)
+    return _cv2.imdecode(np.frombuffer(buf.getvalue(), np.uint8), _cv2.IMREAD_COLOR)
+
+
+def show_figure(fig, window_name: str = "Visualization"):
+    """matplotlib figure を cv2 ウィンドウに表示"""
+    img = _render_fig(fig)
+    if img is not None:
+        _cv2.imshow(window_name, img)
+        _cv2.waitKey(1)
 from utils.coord_transform import CameraIntrinsics, ObjectPose, normalized_to_camera, project_to_image
 
 # 手スケルトン: Shape2Gestureの関節定義に基づく接続リスト
