@@ -256,9 +256,9 @@ async def reconstruct_mesh(
         point_labels=np.array([1]),
         multimask_output=True,
     )
-    best_mask = masks[np.argmax(scores)]
+    best_mask = masks[2]  # mask2 (最大スケール) を使用
     t_sam = time.time()
-    print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px) [{t_sam - t0:.1f}s]")
+    print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px, mask2固定) [{t_sam - t0:.1f}s]")
 
     # SAM-3D をロード → 推論 → 即削除してGPUを解放
     output = _load_sam3d_and_run(rgb, best_mask, seed)
@@ -394,7 +394,7 @@ async def reconstruct_mesh(
         "ply_b64":        ply_b64,
         "masks_b64":      masks_b64,          # [mask0, mask1, mask2]
         "scores":         scores.tolist(),     # [score0, score1, score2]
-        "best_idx":       int(np.argmax(scores)),
+        "best_idx":       2,
         "mesh_path":      mesh_path,
         "template_dir":   template_dir,
         "mask_center_u":  mask_center_u,
