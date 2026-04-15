@@ -77,6 +77,7 @@ python /home/okada/ws/project/server/server.py \
   --sam6d-service  http://localhost:8081 \
   --host 0.0.0.0 --port 8080
 
+
 python test_demo.py --mode offline-mesh --rgb test_data/rgb.png
 python test_demo.py --mode online --rgb test_data/rgb.png --depth test_data/depth.png --mesh meshes/test_object.ply --server-mesh-path "/home/okada/ws/project/tmp/server_reconstructions/object_seed42_mesh.ply" --template-dir "/workspace/tmp/server_reconstructions/object_seed42_mesh_templates"
 ブランチは既に作成済みでした。現在 feature/mesh-projection-fix ブランチにいます。main に戻るときは git checkout main でいつでも戻れます。
