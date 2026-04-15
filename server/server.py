@@ -256,7 +256,7 @@ async def reconstruct_mesh(
         point_labels=np.array([1]),
         multimask_output=True,
     )
-    best_mask = masks[2]  # mask2 (最大スケール) を使用
+    best_mask = masks[1]  # mask index 1 (中スケール) を使用
     t_sam = time.time()
     print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px, mask2固定) [{t_sam - t0:.1f}s]")
 
