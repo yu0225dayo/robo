@@ -348,6 +348,19 @@ async def reconstruct_mesh(
         t_mesh_end = time.time()
         print(f"[Server] BPA 完了 [{t_mesh_end - t_bpa_start:.1f}s]")
 
+    # 点群から頂点への色転送 (KNN最近傍)
+    if gs_ply.has_colors():
+        from sklearn.neighbors import NearestNeighbors
+        pcd_pts = np.asarray(gs_ply.points)
+        pcd_colors = np.asarray(gs_ply.colors)  # [0,1] float
+        mesh_pts = np.asarray(mesh_o3d.vertices)
+        nbrs = NearestNeighbors(n_neighbors=1).fit(pcd_pts)
+        _, indices = nbrs.kneighbors(mesh_pts)
+        mesh_o3d.vertex_colors = o3d.utility.Vector3dVector(pcd_colors[indices.flatten()])
+        print(f"[Server] 点群から頂点色転送完了 ({len(mesh_pts)} 頂点)")
+    else:
+        print("[Server] 点群に色情報なし。頂点色なしでメッシュ保存")
+
     # SAM-3D はmm単位ではなく正規化座標で出力するため、mm単位にスケール変換
     # SAM-6D の get_test_data は /1000 して mm→m を仮定している
     bbox = mesh_o3d.get_axis_aligned_bounding_box()

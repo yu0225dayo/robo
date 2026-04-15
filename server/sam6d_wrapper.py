@@ -251,7 +251,8 @@ class SAM6DWrapper:
             bgr_np = cv2.imread(rgb_path)
             rgb_np = cv2.cvtColor(bgr_np, cv2.COLOR_BGR2RGB)
 
-            if click_x >= 0 and click_y >= 0:
+            _click_mode = click_x >= 0 and click_y >= 0
+            if _click_mode:
                 # --- クリック座標あり: SAM 点プロンプトで直接セグメント ---
                 print(f"[SAM-6D] SAM 点プロンプト: ({click_x}, {click_y})")
                 predictor = self._ism.segmentor_model.predictor
@@ -261,8 +262,8 @@ class SAM6DWrapper:
                     point_labels=np.array([1]),
                     multimask_output=True,
                 )
-                # sam_masks: (3, H, W) bool, スコア降順で保存
-                order = np.argsort(sam_scores)[::-1]
+                # mask index 2 (最大マスク) を先頭に固定し、その後 index 1, 0
+                order = [2, 1, 0]
                 seg_data = []
                 for i in order:
                     mask = sam_masks[i]
@@ -273,6 +274,13 @@ class SAM6DWrapper:
                         "segmentation": {"size": list(mask.shape), "counts": rle["counts"]},
                         "score": float(sam_scores[i]),
                     })
+                # mask_1, 2, 3 として sam6d_results ディレクトリに保存
+                results_dir = os.path.join(os.path.dirname(template_dir.rstrip("/")), "sam6d_results")
+                os.makedirs(results_dir, exist_ok=True)
+                for i in range(3):
+                    save_path = os.path.join(results_dir, f"mask_{i+1}.png")
+                    cv2.imwrite(save_path, (sam_masks[i].astype(np.uint8) * 255))
+                    print(f"[SAM-6D] mask_{i+1}.png 保存: score={sam_scores[i]:.3f} → {save_path}")
                 print(f"[SAM-6D] 点プロンプト完了: {len(seg_data)} マスク")
             else:
                 # --- クリック座標なし: 完全 ISM パイプライン ---
@@ -388,6 +396,24 @@ class SAM6DWrapper:
                 json.dump(seg_data, f)
             torch.cuda.empty_cache()
 
+            # PEM用: オブジェクト領域を白色に置き換えた RGB を生成
+            # 白メッシュから生成したテンプレートと色条件を合わせるため
+            import pycocotools.mask as _cocomask
+            rgb_path_pem = rgb_path
+            if seg_data:
+                # クリックモードはmask index 2 (最大マスク=seg_data[0]) を使用
+                # ISMモードはスコア最高のマスクを使用
+                best_seg = seg_data[0] if _click_mode else max(seg_data, key=lambda x: x["score"])
+                rle = best_seg["segmentation"]
+                rle_decode = {"size": rle["size"],
+                              "counts": rle["counts"].encode("utf-8") if isinstance(rle["counts"], str) else rle["counts"]}
+                obj_mask = _cocomask.decode(rle_decode).astype(bool)
+                bgr_pem = cv2.imread(rgb_path).copy()
+                bgr_pem[obj_mask] = (255, 255, 255)
+                rgb_path_pem = os.path.join(tmpdir, "rgb_pem.png")
+                cv2.imwrite(rgb_path_pem, bgr_pem)
+                print(f"[SAM-6D] PEM用白マスクRGB生成: {obj_mask.sum()} px を白色化")
+
             # Stage 2: テンプレート特徴量取得
             # render_custom_templates.py は output_dir/templates/ に保存する
             tem_path = os.path.join(template_dir, "templates")
@@ -401,7 +427,7 @@ class SAM6DWrapper:
 
             # Stage 3: 観測データ取得 → Pose Estimation
             input_data, _, _, _, dets = get_test_data(
-                rgb_path=rgb_path,
+                rgb_path=rgb_path_pem,
                 depth_path=depth_path,
                 cam_path=cam_path,
                 cad_path=cad_path_mm,
