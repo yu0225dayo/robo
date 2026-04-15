@@ -17,10 +17,11 @@
   curl http://localhost:8081/health
 
 【ステップ3】 メインサーバ (SAM-3D) を起動
-  python ~/ws/project/server.py \
-    --sam-checkpoint ~/ws/project/sam_vit_h_4b8939.pth \
-    --sam3d-config   ~/ws/project/sam-3d-objects/checkpoints/hf/pipeline.yaml \
-    --sam3d-repo     ~/ws/project/sam-3d-objects \
+  conda activate sam3d-objects
+  python /home/okada/ws/project/server/server.py \
+    --sam-checkpoint /home/okada/ws/project/sam2_checkpoints/sam2.1_hiera_large.pt \
+    --sam3d-config   /home/okada/ws/project/server/sam-3d-objects/checkpoints/hf/pipeline.yaml \
+    --sam3d-repo     /home/okada/ws/project/server/sam-3d-objects \
     --sam6d-service  http://localhost:8081 \
     --host 0.0.0.0 --port 8080
 
@@ -71,7 +72,7 @@ docker logs -f sam6d_service   # "models_loaded" が出るまで待つ
 
 conda activate sam3d-objects
 python /home/okada/ws/project/server/server.py \
-  --sam-checkpoint /home/okada/ws/project/sam_vit_h_4b8939.pth \
+  --sam-checkpoint /home/okada/ws/project/sam2_checkpoints/sam2.1_hiera_large.pt \
   --sam3d-config   /home/okada/ws/project/server/sam-3d-objects/checkpoints/hf/pipeline.yaml \
   --sam3d-repo     /home/okada/ws/project/server/sam-3d-objects \
   --sam6d-service  http://localhost:8081 \

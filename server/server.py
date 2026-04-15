@@ -70,12 +70,15 @@ def load_models(sam_checkpoint: str, sam3d_config: str, sam3d_repo: str,
         if p not in sys.path:
             sys.path.insert(0, p)
 
-    # SAM (軽量なのでキープ)
-    from segment_anything import sam_model_registry, SamPredictor
-    sam = sam_model_registry["vit_h"](checkpoint=sam_checkpoint)
-    sam.to(device=device)
-    sam_predictor = SamPredictor(sam)
-    print(f"[Server] SAM ロード完了 ({device})")
+    # SAM2
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+    sam2_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+    # sam_checkpoint 引数をSAM2チェックポイントとして使用
+    sam2_ckpt = sam_checkpoint
+    sam2_model = build_sam2(sam2_cfg, sam2_ckpt, device=device)
+    sam_predictor = SAM2ImagePredictor(sam2_model)
+    print(f"[Server] SAM2 ロード完了 ({device})")
     print("[Server] SAM-3D はリクエスト時にオンデマンドロードします")
 
 
@@ -146,13 +149,14 @@ async def reconstruct(
     else:
         prompt_point = np.array([[click_x, click_y]])
 
-    # Step 1: SAM で2Dマスク生成
-    sam_predictor.set_image(rgb)
-    masks, scores, _ = sam_predictor.predict(
-        point_coords=prompt_point,
-        point_labels=np.array([1]),
-        multimask_output=True,
-    )
+    # Step 1: SAM2 で2Dマスク生成
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        sam_predictor.set_image(rgb)
+        masks, scores, _ = sam_predictor.predict(
+            point_coords=prompt_point,
+            point_labels=np.array([1]),
+            multimask_output=True,
+        )
     best_mask = masks[np.argmax(scores)]
     print(f"[Server] SAM マスク生成完了 (面積: {best_mask.sum()} px, "
           f"プロンプト: ({prompt_point[0][0]}, {prompt_point[0][1]}))")
@@ -250,12 +254,13 @@ async def reconstruct_mesh(
     import time
     t0 = time.time()
 
-    sam_predictor.set_image(rgb)
-    masks, scores, _ = sam_predictor.predict(
-        point_coords=prompt_point,
-        point_labels=np.array([1]),
-        multimask_output=True,
-    )
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        sam_predictor.set_image(rgb)
+        masks, scores, _ = sam_predictor.predict(
+            point_coords=prompt_point,
+            point_labels=np.array([1]),
+            multimask_output=True,
+        )
     best_mask = masks[1]  # mask index 1 (中スケール) を使用
     t_sam = time.time()
     print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px, mask2固定) [{t_sam - t0:.1f}s]")
@@ -280,6 +285,21 @@ async def reconstruct_mesh(
     gs_ply = o3d.io.read_point_cloud(ply_path)
     n_pts = len(gs_ply.points)
     print(f"[Server] 元の点数: {n_pts}")
+
+    # GS PLY の f_dc_* (球面調和DC成分) から RGB 色を復元して点群に付与
+    if not gs_ply.has_colors():
+        try:
+            from plyfile import PlyData
+            ply_data = PlyData.read(ply_path)
+            verts = ply_data['vertex']
+            if 'f_dc_0' in verts.data.dtype.names:
+                f_dc = np.stack([verts['f_dc_0'], verts['f_dc_1'], verts['f_dc_2']], axis=1)
+                colors = f_dc / (2 * np.sqrt(np.pi)) + 0.5  # SH DC → linear RGB
+                colors = np.clip(colors, 0.0, 1.0)
+                gs_ply.colors = o3d.utility.Vector3dVector(colors)
+                print(f"[Server] GS f_dc から色復元完了 ({n_pts} 点)")
+        except Exception as e:
+            print(f"[Server] 色復元スキップ: {e}")
 
     # 全点群を保存
     pcd_full_path = ply_path.replace(".ply", "_pcd_full.ply")
@@ -738,14 +758,15 @@ async def full_pipeline(
     prompt_point = np.array([[click_x if click_x >= 0 else w // 2,
                                click_y if click_y >= 0 else h // 2]])
 
-    sam_predictor.set_image(rgb)
-    masks, scores, _ = sam_predictor.predict(
-        point_coords=prompt_point,
-        point_labels=np.array([1]),
-        multimask_output=True,
-    )
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        sam_predictor.set_image(rgb)
+        masks, scores, _ = sam_predictor.predict(
+            point_coords=prompt_point,
+            point_labels=np.array([1]),
+            multimask_output=True,
+        )
     best_mask = masks[np.argmax(scores)]
-    print(f"[Pipeline] SAM マスク完了 (面積:{best_mask.sum()}px)")
+    print(f"[Pipeline] SAM2 マスク完了 (面積:{best_mask.sum()}px)")
 
     # SAM-3D をロード → 推論 → 即削除してGPUを解放
     recon_output = _load_sam3d_and_run(rgb, best_mask, seed)
@@ -847,12 +868,13 @@ async def segment_only(
 
     prompt_point = np.array([[click_x if click_x >= 0 else w // 2,
                                click_y if click_y >= 0 else h // 2]])
-    sam_predictor.set_image(rgb)
-    masks, scores, _ = sam_predictor.predict(
-        point_coords=prompt_point,
-        point_labels=np.array([1]),
-        multimask_output=True,
-    )
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        sam_predictor.set_image(rgb)
+        masks, scores, _ = sam_predictor.predict(
+            point_coords=prompt_point,
+            point_labels=np.array([1]),
+            multimask_output=True,
+        )
     best_mask = masks[np.argmax(scores)]
     return JSONResponse({
         "mask_area": int(best_mask.sum()),
