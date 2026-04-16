@@ -44,12 +44,17 @@ def create_detection_from_click(rgb_path, click_x, click_y, output_dir):
     score = float(scores[best_idx])
     print(f"[SAM] マスク面積: {mask.sum()}px  スコア: {score:.3f}")
 
-    # 3枚のマスクをすべて保存
+    # 3枚のマスクをすべて保存 (スコアを画像に重畳)
     import cv2 as _cv2
     os.makedirs(f"{output_dir}/sam6d_results", exist_ok=True)
     for i in range(3):
         mask_save_path = f"{output_dir}/sam6d_results/mask_{i+1}.png"
-        _cv2.imwrite(mask_save_path, (masks[i].astype(np.uint8) * 255))
+        # グレースケールマスクをBGR3chに変換してスコアテキストを描画
+        mask_bgr = _cv2.cvtColor(masks[i].astype(np.uint8) * 255, _cv2.COLOR_GRAY2BGR)
+        label = f"mask_{i+1}  score={scores[i]:.3f}"
+        _cv2.putText(mask_bgr, label, (10, 30), _cv2.FONT_HERSHEY_SIMPLEX,
+                     0.9, (0, 255, 0), 2, _cv2.LINE_AA)
+        _cv2.imwrite(mask_save_path, mask_bgr)
         print(f"[SAM] mask_{i+1}.png 保存: score={scores[i]:.3f} → {mask_save_path}")
 
     # bbox (x, y, w, h)

@@ -20,6 +20,7 @@ import os
 import json
 import numpy as np
 import cv2
+import torch
 import httpx
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
@@ -157,9 +158,20 @@ async def reconstruct(
             point_labels=np.array([1]),
             multimask_output=True,
         )
-    best_mask = masks[np.argmax(scores)]
+    best_mask = masks[np.argmax(scores)]  # スコア最大のマスクを使用
     print(f"[Server] SAM マスク生成完了 (面積: {best_mask.sum()} px, "
           f"プロンプト: ({prompt_point[0][0]}, {prompt_point[0][1]}))")
+
+    # SAM2 マスクを保存 (3枚 + スコア表示)
+    os.makedirs(output_dir, exist_ok=True)
+    for _i in range(3):
+        _m = cv2.cvtColor(masks[_i].astype(np.uint8) * 255, cv2.COLOR_GRAY2BGR)
+        cv2.putText(_m, f"mask_{_i+1}  score={scores[_i]:.3f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.imwrite(os.path.join(output_dir, f"mask_sam2_{_i+1}.png"), _m)
+    mask_sam2_path = os.path.join(output_dir, "mask_sam2.png")
+    cv2.imwrite(mask_sam2_path, (best_mask.astype(np.uint8) * 255))
+    print(f"[Server] SAM2 マスク保存: {output_dir}/mask_sam2_{{1,2,3}}.png")
 
     # Step 2: SAM-3D でモデル生成 (推論後に即削除)
     output = _load_sam3d_and_run(rgb, best_mask, seed)
@@ -261,9 +273,21 @@ async def reconstruct_mesh(
             point_labels=np.array([1]),
             multimask_output=True,
         )
-    best_mask = masks[1]  # mask index 1 (中スケール) を使用
+    best_mask = masks[np.argmax(scores)]  # スコア最大のマスクを使用
     t_sam = time.time()
-    print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px, mask2固定) [{t_sam - t0:.1f}s]")
+    print(f"[Server] SAM マスク完了 (面積:{best_mask.sum()}px, score={scores[np.argmax(scores)]:.3f}) [{t_sam - t0:.1f}s]")
+
+    # SAM2 マスクを保存 (3枚 + スコア表示)
+    save_dir = output_dir if output_dir else os.path.join(_host_tmp, "server_reconstructions")
+    os.makedirs(save_dir, exist_ok=True)
+    for _i in range(3):
+        _m = cv2.cvtColor(masks[_i].astype(np.uint8) * 255, cv2.COLOR_GRAY2BGR)
+        cv2.putText(_m, f"mask_{_i+1}  score={scores[_i]:.3f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.imwrite(os.path.join(save_dir, f"mask_sam2_{_i+1}.png"), _m)
+    mask_sam2_path = os.path.join(save_dir, "mask_sam2.png")
+    cv2.imwrite(mask_sam2_path, (best_mask.astype(np.uint8) * 255))
+    print(f"[Server] SAM2 マスク保存: {save_dir}/mask_sam2_{{1,2,3}}.png")
 
     # SAM-3D をロード → 推論 → 即削除してGPUを解放
     output = _load_sam3d_and_run(rgb, best_mask, seed)
@@ -271,7 +295,6 @@ async def reconstruct_mesh(
     print(f"[Server] SAM-3D 推論完了 [{t_sam3d - t_sam:.1f}s]")
 
     # 共有tmpに保存してDockerからアクセスできるようにする
-    save_dir = output_dir if output_dir else os.path.join(_host_tmp, "server_reconstructions")
     os.makedirs(save_dir, exist_ok=True)
     ply_path = os.path.join(save_dir, f"object_seed{seed}.ply")
     # GS点群をPLYに保存
@@ -765,8 +788,19 @@ async def full_pipeline(
             point_labels=np.array([1]),
             multimask_output=True,
         )
-    best_mask = masks[np.argmax(scores)]
-    print(f"[Pipeline] SAM2 マスク完了 (面積:{best_mask.sum()}px)")
+    best_mask = masks[np.argmax(scores)]  # スコア最大のマスクを使用
+    print(f"[Pipeline] SAM2 マスク完了 (面積:{best_mask.sum()}px, score={scores[np.argmax(scores)]:.3f})")
+
+    # SAM2 マスクを保存 (3枚 + スコア表示)
+    os.makedirs(output_dir, exist_ok=True)
+    for _i in range(3):
+        _m = cv2.cvtColor(masks[_i].astype(np.uint8) * 255, cv2.COLOR_GRAY2BGR)
+        cv2.putText(_m, f"mask_{_i+1}  score={scores[_i]:.3f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.imwrite(os.path.join(output_dir, f"mask_sam2_{_i+1}.png"), _m)
+    mask_sam2_path = os.path.join(output_dir, "mask_sam2.png")
+    cv2.imwrite(mask_sam2_path, (best_mask.astype(np.uint8) * 255))
+    print(f"[Pipeline] SAM2 マスク保存: {output_dir}/mask_sam2_{{1,2,3}}.png")
 
     # SAM-3D をロード → 推論 → 即削除してGPUを解放
     recon_output = _load_sam3d_and_run(rgb, best_mask, seed)
@@ -875,10 +909,10 @@ async def segment_only(
             point_labels=np.array([1]),
             multimask_output=True,
         )
-    best_mask = masks[np.argmax(scores)]
+    best_mask = masks[1]  # mask index 1 (中スケール) を使用
     return JSONResponse({
         "mask_area": int(best_mask.sum()),
-        "score": float(scores[np.argmax(scores)]),
+        "score": float(scores[1]),
     })
 
 
