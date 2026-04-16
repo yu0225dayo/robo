@@ -507,14 +507,71 @@ async def pose_estimate(
     with open(cam_host, "w") as f:
         json.dump(cam_json_data, f)
 
-    # Docker パス
-    rgb_docker   = f"{_docker_tmp}/rgb.png"
-    depth_docker = f"{_docker_tmp}/depth.png"
-    cam_docker   = f"{_docker_tmp}/camera_custom.json"
+    # ---- SAM2 でマスク生成 → detection_ism.json として保存 ----
+    rgb_np = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    px = click_x if click_x >= 0 else w // 2
+    py = click_y if click_y >= 0 else h // 2
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        sam_predictor.set_image(rgb_np)
+        sam2_masks, sam2_scores, _ = sam_predictor.predict(
+            point_coords=np.array([[px, py]]),
+            point_labels=np.array([1]),
+            multimask_output=True,
+        )
+    best_idx = int(np.argmax(sam2_scores))
+    best_sam2_mask = sam2_masks[best_idx]
+    print(f"[pose_estimate] SAM2 マスク完了 (面積:{best_sam2_mask.sum()}px, score={sam2_scores[best_idx]:.3f})")
 
     # template_dir (Docker path) → output_dir (テンプレートの親ディレクトリ)
     tdir = template_dir.rstrip("/")
     output_dir_docker = tdir[:-len("/templates")] if tdir.endswith("/templates") else tdir
+    output_dir_host = output_dir_docker.replace(_docker_tmp, _host_tmp)
+    sam6d_results_dir = os.path.join(output_dir_host, "sam6d_results")
+    os.makedirs(sam6d_results_dir, exist_ok=True)
+    try:
+        os.chmod(sam6d_results_dir, 0o777)
+    except Exception:
+        pass
+
+    # SAM2マスク3枚をスコア付きで保存
+    for _i in range(3):
+        _m = cv2.cvtColor(sam2_masks[_i].astype(np.uint8) * 255, cv2.COLOR_GRAY2BGR)
+        cv2.putText(_m, f"sam2_mask_{_i+1}  score={sam2_scores[_i]:.3f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.imwrite(os.path.join(sam6d_results_dir, f"mask_sam2_{_i+1}.png"), _m)
+
+    # detection_ism.json として保存 (run_demo_custom.sh のSAM1をスキップ)
+    import pycocotools.mask as cocomask
+    rle = cocomask.encode(np.asfortranarray(best_sam2_mask.astype(np.uint8)))
+    rle["counts"] = rle["counts"].decode("utf-8")
+    ys, xs = np.where(best_sam2_mask)
+    x1, x2 = int(xs.min()), int(xs.max())
+    y1, y2 = int(ys.min()), int(ys.max())
+    detection_ism = [{
+        "scene_id": 0, "image_id": 0, "category_id": 0,
+        "bbox": [x1, y1, x2 - x1, y2 - y1],
+        "score": float(sam2_scores[best_idx]),
+        "segmentation": rle,
+        "time": 0.0,
+    }]
+    detection_ism_path = os.path.join(sam6d_results_dir, "detection_ism.json")
+    with open(detection_ism_path, "w") as f:
+        json.dump(detection_ism, f)
+    print(f"[pose_estimate] detection_ism.json 保存 (SAM2): {detection_ism_path}")
+
+    # vis_mask.png 生成 (マスクオーバーレイ + クリック点 + bbox)
+    vis = rgb_np.copy()
+    bool_mask = best_sam2_mask.astype(bool)
+    vis[bool_mask] = (vis[bool_mask] * 0.5 + np.array([0, 255, 0]) * 0.5).astype(np.uint8)
+    cv2.circle(vis, (px, py), 6, (255, 0, 0), -1)
+    cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 0, 255), 2)
+    cv2.imwrite(os.path.join(sam6d_results_dir, "vis_mask.png"), cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+    print(f"[pose_estimate] vis_mask.png 保存: {sam6d_results_dir}")
+
+    # Docker パス
+    rgb_docker   = f"{_docker_tmp}/rgb.png"
+    depth_docker = f"{_docker_tmp}/depth.png"
+    cam_docker   = f"{_docker_tmp}/camera_custom.json"
 
     script_docker = "/workspace/SAM-6D/SAM-6D/run_demo_custom.sh"
     cmd = [
