@@ -244,7 +244,7 @@ def draw_height_pcd(
             continue
         cv2.drawMarker(img, (ui, vi), color,
                        markerType=cv2.MARKER_STAR,
-                       markerSize=20, thickness=2, line_type=cv2.LINE_AA)
+                       markerSize=12, thickness=1, line_type=cv2.LINE_AA)
 
     # 高さテキスト
     cv2.putText(img, f"Height: {height_m*100:.1f} cm",
