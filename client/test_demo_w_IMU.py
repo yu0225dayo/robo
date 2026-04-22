@@ -45,6 +45,7 @@ def load_config(path="config.yaml"):
 
 
 def load_intrinsics(args, img_w: int, img_h: int):
+    """intrinsics を読み込む。cam.json に gravity が含まれていれば args.gravity に設定する。"""
     import json as _json
     from utils.coord_transform import CameraIntrinsics
 
@@ -59,6 +60,10 @@ def load_intrinsics(args, img_w: int, img_h: int):
             raise ValueError(f"cam_K の形式が不正: {K}")
         if "depth_scale" in cam and args.depth_scale == 0.001:
             args.depth_scale = cam["depth_scale"]
+        # gravity が JSON に含まれていて --gravity 未指定なら自動設定
+        if "gravity" in cam and args.gravity is None:
+            args.gravity = cam["gravity"]
+            print(f"[intrinsics] cam_json から gravity 読み込み: {args.gravity}")
         print(f"[intrinsics] cam_json から読み込み: fx={fx} fy={fy} cx={cx} cy={cy}  depth_scale={args.depth_scale}")
     else:
         fx = args.fx

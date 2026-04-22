@@ -120,21 +120,22 @@ def main():
             "depth_scale": depth_scale,
             "width":  intr.width,
             "height": intr.height,
+            "gravity": gravity_vec.tolist(),
         }
         with open(os.path.join(out_dir, "cam.json"), "w") as f:
             json.dump(cam_data, f, indent=2)
 
-        np.save(os.path.join(out_dir, "gravity.npy"), gravity_vec)
+        cv2.imwrite(os.path.join(out_dir, "rgb.png"),   color_image)
+        cv2.imwrite(os.path.join(out_dir, "depth.png"), depth_raw)
 
         g = gravity_vec
         print(f"\n[保存完了] {out_dir}/")
-        print(f"  rgb.png  depth.png  cam.json  gravity.npy")
+        print(f"  rgb.png  depth.png  cam.json")
         print(f"\n[次のコマンド]")
         print(f"  python test_demo_w_IMU.py --mode full \\")
         print(f"    --rgb {out_dir}/rgb.png \\")
         print(f"    --depth {out_dir}/depth.png \\")
         print(f"    --cam-json {out_dir}/cam.json \\")
-        print(f"    --gravity {g[0]:.6f} {g[1]:.6f} {g[2]:.6f} \\")
         print(f"    --no-show --skip-grasp")
 
     finally:
