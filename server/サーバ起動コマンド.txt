@@ -3,11 +3,11 @@
 ==============================
 
 【ステップ1】 SAM-6D Docker イメージのビルド (初回のみ)
-  cd ~/ws/project
+  cd ~/ws/project/server
   docker compose build sam6d
 
 【ステップ2】 SAM-6D Docker サービスを起動
-  cd ~/ws/project
+  cd ~/ws/project/server
   docker compose up -d sam6d
 
   # ログ確認 (モデルロードに数分かかる)
