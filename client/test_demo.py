@@ -199,9 +199,17 @@ def run_full(args, config):
     if img_pose is not None:
         cv2.imwrite("output/test/server_pointcloud.png", img_pose)
         print("[Step 2] 点群投影画像保存: output/test/server_pointcloud.png")
+        if not args.no_show:
+            cv2.imshow("Pose: pointcloud", img_pose)
     if img_mesh is not None:
         cv2.imwrite("output/test/server_mesh.png", img_mesh)
         print("[Step 2] メッシュ投影画像保存: output/test/server_mesh.png")
+        if not args.no_show:
+            cv2.imshow("Pose: mesh", img_mesh)
+    if not args.no_show:
+        print("何かキーを押すと続行...")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     if args.skip_grasp:
         print("\n[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")
