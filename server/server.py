@@ -603,10 +603,15 @@ async def pose_estimate(
     if estimated_size_mm is not None:
         import trimesh as _trimesh
         import glob as _glob
-        scale_factor = estimated_size_mm / 200.0
+        # メッシュのZ軸長を取得してscale_factorを計算 (入力値=高さ=Z軸長)
+        _m = _trimesh.load_mesh(mesh_host_path)
+        _z_extent = _m.bounding_box.extents[2]  # Z軸方向の長さ [mm]
+        if _z_extent > 0:
+            scale_factor = estimated_size_mm / _z_extent
+        else:
+            scale_factor = estimated_size_mm / 200.0
         # メッシュをスケーリングして保存
         scaled_mesh_host = mesh_host_path.replace(".ply", "_scaled.ply")
-        _m = _trimesh.load_mesh(mesh_host_path)
         _m.apply_scale(scale_factor)
         _m.export(scaled_mesh_host)
         mesh_path_for_pem = scaled_mesh_host.replace(_host_tmp, _docker_tmp)
@@ -615,14 +620,13 @@ async def pose_estimate(
         for _xyz_path in _glob.glob(os.path.join(tem_dir, "xyz_*.npy")):
             _xyz = np.load(_xyz_path).astype(np.float32)
             _out = os.path.join(tem_dir, os.path.basename(_xyz_path))
-            # 既存ファイルを削除してから新規作成 (root所有ファイルへの直接上書きを回避)
             try:
                 os.remove(_out)
             except OSError:
                 pass
             np.save(_out, _xyz * scale_factor)
         output_dir_docker_for_pem = output_dir_docker
-        print(f"[pose_estimate] スケール: 200mm → {estimated_size_mm:.1f}mm (factor={scale_factor:.3f})")
+        print(f"[pose_estimate] Z軸スケール: {_z_extent:.1f}mm → {estimated_size_mm:.1f}mm (factor={scale_factor:.3f})")
     else:
         mesh_path_for_pem = mesh_host_path.replace(_host_tmp, _docker_tmp)
         output_dir_docker_for_pem = output_dir_docker
