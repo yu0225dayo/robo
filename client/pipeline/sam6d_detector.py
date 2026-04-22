@@ -160,6 +160,15 @@ class SAM6DClient:
         cv2.waitKey(1)
         cx, cy = clicked[0]
 
+        # cv2 の Enter キーが stdin に残るのでフラッシュ
+        try:
+            import msvcrt
+            while msvcrt.kbhit():
+                msvcrt.getch()
+        except ImportError:
+            import termios, sys
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+
         # サイズ入力
         object_size_mm = 0.0
         while True:
