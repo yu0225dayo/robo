@@ -390,8 +390,16 @@ def run_full(args, config):
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
+    print("\n" + "=" * 50)
+    if object_size_mm > 0:
+        print(f"  推定物体高さ: {object_size_mm/10:.1f} cm  ({object_size_mm:.0f} mm)")
+    else:
+        print(f"  推定物体高さ: 自動推定 (高さ入力なし)")
+    print(f"  pose t: [{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
+    print("=" * 50)
+
     if args.skip_grasp:
-        print("\n[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")
+        print("[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")
         return
 
     # ---- Step 4: Shape2Gesture ----
