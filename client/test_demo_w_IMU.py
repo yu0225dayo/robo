@@ -541,15 +541,17 @@ def main():
     parser.add_argument("--skip-grasp", action="store_true",
                         help="Shape2Gesture をスキップして pose 可視化のみ実行")
 
-    # 入力データ
-    parser.add_argument("--rgb",   required=True,  help="RGB 画像パス (.png/.jpg)")
-    parser.add_argument("--depth", default=None,   help="深度画像パス (.png)")
+    # フォルダ指定（rgb.png / depth.png / cam.json を自動解決）
+    parser.add_argument("--data-dir", default=None,
+                        help="save_data_IMU.py で保存したフォルダ。指定すると --rgb/--depth/--cam-json を自動設定。")
+
+    # 個別ファイル指定（--data-dir より低優先）
+    parser.add_argument("--rgb",   default=None,  help="RGB 画像パス (.png/.jpg)")
+    parser.add_argument("--depth", default=None,  help="深度画像パス (.png)")
     parser.add_argument("--depth-scale", type=float, default=0.001,
                         help="深度のスケール係数 (0.001: mm→m, デフォルト)")
-
-    # カメラ内部パラメータ
     parser.add_argument("--cam-json", default=None,
-                        help="camera JSON ファイル ({cam_K:[fx,0,cx,0,fy,cy,0,0,1], depth_scale:1.0})")
+                        help="camera JSON ファイル ({cam_K:[...], depth_scale, gravity})")
     parser.add_argument("--fx", type=float, default=591.0)
     parser.add_argument("--fy", type=float, default=590.0)
     parser.add_argument("--cx", type=float, default=-1)
@@ -567,28 +569,42 @@ def main():
     parser.add_argument("--click-y",    type=int, default=-1)
     parser.add_argument("--interactive", action="store_true", default=True)
 
-    # 高さ指定（3 種類の優先順位: --object-size > --gravity > IMU 自動）
+    # 高さ指定（優先順位: --object-size > --gravity > cam.json の gravity > IMU 自動）
     parser.add_argument("--object-size", type=float, default=0.0,
                         help="物体の高さ [cm]。指定するとIMU・深度推定を上書き。")
     parser.add_argument("--gravity", type=float, nargs=3, default=None,
                         metavar=("GX", "GY", "GZ"),
-                        help="重力方向ベクトル (例: 0 -1 0)。IMU 代替。--object-size より低優先。")
+                        help="重力方向ベクトル手動指定。cam.json の gravity より優先。")
     parser.add_argument("--imu-samples", type=int, default=30,
                         help="IMU サンプル数 (デフォルト: 30)")
 
     args = parser.parse_args()
+
+    # --data-dir が指定されていれば rgb/depth/cam-json を自動設定
+    if args.data_dir:
+        if args.rgb is None:
+            args.rgb = os.path.join(args.data_dir, "rgb.png")
+        if args.depth is None:
+            args.depth = os.path.join(args.data_dir, "depth.png")
+        if args.cam_json is None:
+            args.cam_json = os.path.join(args.data_dir, "cam.json")
+        print(f"[data-dir] {args.data_dir} → rgb/depth/cam.json を自動設定")
+
     config = load_config(args.config)
 
     if args.mode == "offline-mesh":
+        if not args.rgb:
+            print("エラー: --rgb または --data-dir を指定してください。")
+            sys.exit(1)
         run_offline_mesh(args, config)
     elif args.mode == "full":
-        if not args.depth:
-            print("エラー: --depth を指定してください。")
+        if not args.rgb or not args.depth:
+            print("エラー: --data-dir または --rgb/--depth を指定してください。")
             sys.exit(1)
         run_full(args, config)
     else:
-        if not args.depth:
-            print("エラー: --depth を指定してください。")
+        if not args.rgb or not args.depth:
+            print("エラー: --data-dir または --rgb/--depth を指定してください。")
             sys.exit(1)
         if not args.mesh:
             print("エラー: --mesh を指定してください。")
