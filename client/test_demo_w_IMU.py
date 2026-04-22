@@ -234,25 +234,17 @@ def draw_height_pcd(
     u = np.where(valid, (pts[:, 0] * fx / Z + cx).astype(np.int32), -1)
     v = np.where(valid, (pts[:, 1] * fy / Z + cy).astype(np.int32), -1)
 
-    # 描画（間引き: 最大 2000 点）
-    idx = np.arange(len(pts))
-    if len(idx) > 2000:
-        idx = np.random.choice(idx, 2000, replace=False)
-
-    for i in idx:
-        if not valid[i]:
+    # 最高点（赤）・最低点（青）の2点のみ描画
+    for target_idx, color in [(np.argmax(proj), (0, 0, 255)),   # 最高点: 赤
+                               (np.argmin(proj), (255, 0, 0))]: # 最低点: 青
+        if not valid[target_idx]:
             continue
-        ui, vi = int(u[i]), int(v[i])
+        ui, vi = int(u[target_idx]), int(v[target_idx])
         if not (0 <= ui < W and 0 <= vi < H):
             continue
-        t = float(norm[i])
-        # blue(255,0,0) → red(0,0,255) in BGR
-        b = int(255 * (1 - t))
-        r = int(255 * t)
-        color = (b, 0, r)
         cv2.drawMarker(img, (ui, vi), color,
                        markerType=cv2.MARKER_STAR,
-                       markerSize=8, thickness=1, line_type=cv2.LINE_AA)
+                       markerSize=20, thickness=2, line_type=cv2.LINE_AA)
 
     # 高さテキスト
     cv2.putText(img, f"Height: {height_m*100:.1f} cm",
