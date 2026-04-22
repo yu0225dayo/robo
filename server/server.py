@@ -611,30 +611,25 @@ async def pose_estimate(
     if estimated_size_mm is not None:
         import trimesh as _trimesh
         import glob as _glob
-        import shutil as _shutil
         scale_factor = estimated_size_mm / 200.0
-        # メッシュをスケーリング
+        # メッシュをスケーリングして保存
         scaled_mesh_host = mesh_host_path.replace(".ply", "_scaled.ply")
         _m = _trimesh.load_mesh(mesh_host_path)
         _m.apply_scale(scale_factor)
         _m.export(scaled_mesh_host)
         mesh_path_for_pem = scaled_mesh_host.replace(_host_tmp, _docker_tmp)
-        # テンプレートxyzも同比率でスケーリング (meshと整合)
-        tem_src = os.path.join(output_dir_host, "templates")
-        scaled_output_host = output_dir_host + "_scaled"
-        scaled_tem_dst = os.path.join(scaled_output_host, "templates")
-        os.makedirs(scaled_tem_dst, exist_ok=True)
-        for _f in _glob.glob(os.path.join(tem_src, "rgb_*.png")) + \
-                  _glob.glob(os.path.join(tem_src, "mask_*.png")):
-            _shutil.copy2(_f, scaled_tem_dst)
-        for _xyz_path in _glob.glob(os.path.join(tem_src, "xyz_*.npy")):
+        # テンプレートxyz を元ディレクトリに直接上書き (新規ファイルとして書き込む)
+        tem_dir = os.path.join(output_dir_host, "templates")
+        for _xyz_path in _glob.glob(os.path.join(tem_dir, "xyz_*.npy")):
             _xyz = np.load(_xyz_path).astype(np.float32)
-            np.save(os.path.join(scaled_tem_dst, os.path.basename(_xyz_path)),
-                    _xyz * scale_factor)
-        _shutil.copytree(sam6d_results_dir,
-                         os.path.join(scaled_output_host, "sam6d_results"),
-                         dirs_exist_ok=True)
-        output_dir_docker_for_pem = scaled_output_host.replace(_host_tmp, _docker_tmp)
+            _out = os.path.join(tem_dir, os.path.basename(_xyz_path))
+            # 既存ファイルを削除してから新規作成 (root所有ファイルへの直接上書きを回避)
+            try:
+                os.remove(_out)
+            except OSError:
+                pass
+            np.save(_out, _xyz * scale_factor)
+        output_dir_docker_for_pem = output_dir_docker
         print(f"[pose_estimate] スケール: 200mm → {estimated_size_mm:.1f}mm (factor={scale_factor:.3f})")
     else:
         mesh_path_for_pem = mesh_host_path.replace(_host_tmp, _docker_tmp)
@@ -657,21 +652,10 @@ async def pose_estimate(
     if proc.returncode != 0:
         raise HTTPException(500, f"run_demo_custom.sh 失敗:\n{proc.stderr[-2000:]}")
 
-    # 結果 JSON 読み込み (スケーリング済みの場合はそちらから)
-    result_output_host = output_dir_docker_for_pem.replace(_docker_tmp, _host_tmp)
-    result_json_path = os.path.join(result_output_host, "sam6d_results", "detection_pem.json")
+    # 結果 JSON 読み込み
+    result_json_path = os.path.join(sam6d_results_dir, "detection_pem.json")
     with open(result_json_path, "r") as f:
         detections = json.load(f)
-
-    # scaled ディレクトリに書かれた結果画像を元の sam6d_results_dir にもコピー
-    if result_output_host != output_dir_host:
-        import shutil as _shutil2
-        for _fname in ["vis_pem.png", "vis_ism.png", "detection_pem.json"]:
-            _src = os.path.join(result_output_host, "sam6d_results", _fname)
-            _dst = os.path.join(sam6d_results_dir, _fname)
-            if os.path.exists(_src):
-                _shutil2.copy2(_src, _dst)
-        print(f"[pose_estimate] 結果画像を {sam6d_results_dir} にコピー")
 
     if not detections:
         raise HTTPException(500, "pose 推定失敗: detection が空です")
