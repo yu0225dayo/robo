@@ -45,6 +45,7 @@ class SAM6DClient:
         self._mesh_path: Optional[str] = None      # ローカルの .ply パス
         self._server_mesh_path: str = ""            # サーバ側の .ply パス
         self._template_dir: str = ""               # サーバ側テンプレートディレクトリ
+        self._object_size_mm: float = 0.0          # ユーザ指定サイズ (0=自動)
 
     # ------------------------------------------------------------------
     # オフライン: reference mesh の生成・保存
@@ -58,6 +59,7 @@ class SAM6DClient:
         click_y: int = -1,
         seed: int = 42,
         mesh_method: str = "bpa",
+        object_size_mm: float = 0.0,
     ) -> Tuple[str, list, list]:
         """
         RGB画像をサーバに送り、SAM-3D で生成した reference mesh を保存する
@@ -81,7 +83,8 @@ class SAM6DClient:
         resp = requests.post(
             f"{self.server_url}/reconstruct_mesh",
             files={"image": ("frame.jpg", image_bytes, "image/jpeg")},
-            data={"click_x": click_x, "click_y": click_y, "seed": seed, "mesh_method": mesh_method},
+            data={"click_x": click_x, "click_y": click_y, "seed": seed, "mesh_method": mesh_method,
+                  "object_size_mm": object_size_mm},
             timeout=self.timeout_mesh,
         )
 
@@ -117,6 +120,7 @@ class SAM6DClient:
             print(f"[SAM6D] テンプレート: {self._template_dir}")
 
         self._mesh_path = mesh_save_path
+        self._object_size_mm = object_size_mm
         return mesh_save_path, masks, scores
 
     def save_reference_mesh_interactive(
@@ -155,10 +159,26 @@ class SAM6DClient:
         cv2.destroyAllWindows()
         cv2.waitKey(1)
         cx, cy = clicked[0]
+
+        # サイズ入力
+        object_size_mm = 0.0
+        while True:
+            try:
+                raw = input("[SAM6D] 物体の最長辺を入力してください (cm, スキップは Enter): ").strip()
+                if raw == "":
+                    print("[SAM6D] サイズ未入力: 深度から自動推定します")
+                    break
+                object_size_mm = float(raw) * 10.0  # cm → mm
+                print(f"[SAM6D] 指定サイズ: {raw} cm = {object_size_mm:.0f} mm")
+                break
+            except ValueError:
+                print("  数値を入力してください (例: 15.5)")
+
         mesh_path, masks, scores = self.save_reference_mesh(
             rgb, mesh_save_path,
             click_x=cx, click_y=cy, seed=seed,
             mesh_method=mesh_method,
+            object_size_mm=object_size_mm,
         )
         return mesh_path, cx, cy, masks, scores
 
@@ -233,10 +253,11 @@ class SAM6DClient:
                 "fy":           intrinsics.fy,
                 "cx":           intrinsics.cx,
                 "cy":           intrinsics.cy,
-                "mesh_path":    self._server_mesh_path,
-                "template_dir": self._template_dir,
-                "click_x":      click_x,
-                "click_y":      click_y,
+                "mesh_path":       self._server_mesh_path,
+                "template_dir":    self._template_dir,
+                "click_x":         click_x,
+                "click_y":         click_y,
+                "object_size_mm":  self._object_size_mm,
             },
             timeout=self.timeout_pose,
         )

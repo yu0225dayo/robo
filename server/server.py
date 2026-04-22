@@ -237,6 +237,7 @@ async def reconstruct_mesh(
     target_points: int = Form(2048),
     output_dir: str = Form(""),
     mesh_method: str = Form("bpa"),  # "bpa" or "poisson"
+    object_size_mm: float = Form(0.0),  # 0=自動(200mm), >0=指定サイズ
 ):
     """
     クライアント互換エンドポイント: SAM-3D でメッシュ生成 + SAM-6D テンプレートレンダリング
@@ -409,12 +410,15 @@ async def reconstruct_mesh(
     bbox = mesh_o3d.get_axis_aligned_bounding_box()
     max_extent = max(bbox.get_extent())
     if max_extent > 0:
-        scale = 200.0 / max_extent  # 最長辺を200mmに正規化
+        target_mm = object_size_mm if object_size_mm > 0 else 200.0
+        scale = target_mm / max_extent
         mesh_o3d.scale(scale, center=bbox.get_center())
+    else:
+        target_mm = object_size_mm if object_size_mm > 0 else 200.0
     # SAM-6D はモデル原点=物体中心を前提とするため原点に移動
     center = mesh_o3d.get_axis_aligned_bounding_box().get_center()
     mesh_o3d.translate(-center)
-    print(f"[Server] メッシュスケール変換: {max_extent:.4f} → 200mm (原点中心化済み)")
+    print(f"[Server] メッシュスケール変換: {max_extent:.4f} → {target_mm:.0f}mm (原点中心化済み)")
 
     mesh_path = ply_path.replace(".ply", "_mesh.ply")
     o3d.io.write_triangle_mesh(mesh_path, mesh_o3d)
@@ -471,6 +475,7 @@ async def pose_estimate(
     det_score_thresh: float = Form(0.2),
     click_x: int = Form(-1),
     click_y: int = Form(-1),
+    object_size_mm: float = Form(0.0),  # 0=深度から自動推定, >0=指定サイズ
 ):
     """
     クライアント互換エンドポイント: 6DoF 姿勢推定
@@ -521,6 +526,7 @@ async def pose_estimate(
     best_idx = int(np.argmax(sam2_scores))
     best_sam2_mask = sam2_masks[best_idx]
     print(f"[pose_estimate] SAM2 マスク完了 (面積:{best_sam2_mask.sum()}px, score={sam2_scores[best_idx]:.3f})")
+
 
     # template_dir (Docker path) → output_dir (テンプレートの親ディレクトリ)
     tdir = template_dir.rstrip("/")
@@ -573,12 +579,66 @@ async def pose_estimate(
     depth_docker = f"{_docker_tmp}/depth.png"
     cam_docker   = f"{_docker_tmp}/camera_custom.json"
 
+    # RGBDから実スケール推定 → メッシュをスケーリング (model_points/radius に影響)
+    # テンプレートxyzはNOCS形式のためスケーリング不要
+    _ys, _xs = np.where(best_sam2_mask.astype(bool))
+    _Z = depth_f32[_ys, _xs]
+    _valid = _Z > 0
+    estimated_size_mm = None
+    if _valid.sum() > 10:
+        _Zv = _Z[_valid]
+        _Xv = (_xs[_valid] - cx) * _Zv / fx
+        _Yv = (_ys[_valid] - cy) * _Zv / fy
+        _pts = np.stack([_Xv, _Yv, _Zv], axis=1)
+        _extent = _pts.max(axis=0) - _pts.min(axis=0)
+        estimated_size_mm = float(_extent.max()) * 1000.0
+        print(f"[pose_estimate] 推定物体サイズ: {estimated_size_mm:.1f}mm "
+              f"(X:{_extent[0]*1000:.1f} Y:{_extent[1]*1000:.1f} Z:{_extent[2]*1000:.1f} mm)")
+
+    # object_size_mm が指定されている場合は深度推定より優先
+    if object_size_mm > 0:
+        estimated_size_mm = object_size_mm
+        print(f"[pose_estimate] 指定サイズ使用: {estimated_size_mm:.1f}mm")
+
+    mesh_host_path = mesh_path.replace(_docker_tmp, _host_tmp)
+    if estimated_size_mm is not None:
+        import trimesh as _trimesh
+        import glob as _glob
+        import shutil as _shutil
+        scale_factor = estimated_size_mm / 200.0
+        # メッシュをスケーリング
+        scaled_mesh_host = mesh_host_path.replace(".ply", "_scaled.ply")
+        _m = _trimesh.load_mesh(mesh_host_path)
+        _m.apply_scale(scale_factor)
+        _m.export(scaled_mesh_host)
+        mesh_path_for_pem = scaled_mesh_host.replace(_host_tmp, _docker_tmp)
+        # テンプレートxyzも同比率でスケーリング (meshと整合)
+        tem_src = os.path.join(output_dir_host, "templates")
+        scaled_output_host = output_dir_host + "_scaled"
+        scaled_tem_dst = os.path.join(scaled_output_host, "templates")
+        os.makedirs(scaled_tem_dst, exist_ok=True)
+        for _f in _glob.glob(os.path.join(tem_src, "rgb_*.png")) + \
+                  _glob.glob(os.path.join(tem_src, "mask_*.png")):
+            _shutil.copy2(_f, scaled_tem_dst)
+        for _xyz_path in _glob.glob(os.path.join(tem_src, "xyz_*.npy")):
+            _xyz = np.load(_xyz_path).astype(np.float32)
+            np.save(os.path.join(scaled_tem_dst, os.path.basename(_xyz_path)),
+                    _xyz * scale_factor)
+        _shutil.copytree(sam6d_results_dir,
+                         os.path.join(scaled_output_host, "sam6d_results"),
+                         dirs_exist_ok=True)
+        output_dir_docker_for_pem = scaled_output_host.replace(_host_tmp, _docker_tmp)
+        print(f"[pose_estimate] スケール: 200mm → {estimated_size_mm:.1f}mm (factor={scale_factor:.3f})")
+    else:
+        mesh_path_for_pem = mesh_host_path.replace(_host_tmp, _docker_tmp)
+        output_dir_docker_for_pem = output_dir_docker
+
     script_docker = "/workspace/SAM-6D/SAM-6D/run_demo_custom.sh"
     cmd = [
         "docker", "exec", "sam6d_service",
         "bash", script_docker,
-        to_docker_path(mesh_path),
-        output_dir_docker,
+        mesh_path_for_pem,
+        output_dir_docker_for_pem,
         str(click_x),
         str(click_y),
         rgb_docker,
@@ -590,9 +650,9 @@ async def pose_estimate(
     if proc.returncode != 0:
         raise HTTPException(500, f"run_demo_custom.sh 失敗:\n{proc.stderr[-2000:]}")
 
-    # 結果 JSON 読み込み
-    output_dir_host  = output_dir_docker.replace(_docker_tmp, _host_tmp)
-    result_json_path = os.path.join(output_dir_host, "sam6d_results", "detection_pem.json")
+    # 結果 JSON 読み込み (スケーリング済みの場合はそちらから)
+    result_output_host = output_dir_docker_for_pem.replace(_docker_tmp, _host_tmp)
+    result_json_path = os.path.join(result_output_host, "sam6d_results", "detection_pem.json")
     with open(result_json_path, "r") as f:
         detections = json.load(f)
 
