@@ -408,7 +408,7 @@ def main():
     parser.add_argument("--click-y",    type=int, default=-1)
     parser.add_argument("--interactive", action="store_true", default=True)
     parser.add_argument("--object-size", type=float, default=0.0,
-                        help="物体の最長辺 [cm] (0=自動推定, 例: 15.5)")
+                        help="物体の高さ [cm] (0=自動推定, 例: 15.5)")
 
     args = parser.parse_args()
     config = load_config(args.config)

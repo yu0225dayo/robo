@@ -164,12 +164,12 @@ class SAM6DClient:
         object_size_mm = 0.0
         while True:
             try:
-                raw = input("[SAM6D] 物体の最長辺を入力してください (cm, スキップは Enter): ").strip()
+                raw = input("[SAM6D] 物体の高さを入力してください (cm, スキップは Enter): ").strip()
                 if raw == "":
                     print("[SAM6D] サイズ未入力: 深度から自動推定します")
                     break
                 object_size_mm = float(raw) * 10.0  # cm → mm
-                print(f"[SAM6D] 指定サイズ: {raw} cm = {object_size_mm:.0f} mm")
+                print(f"[SAM6D] 指定高さ: {raw} cm = {object_size_mm:.0f} mm")
                 break
             except ValueError:
                 print("  数値を入力してください (例: 15.5)")

@@ -408,17 +408,24 @@ async def reconstruct_mesh(
     # SAM-3D はmm単位ではなく正規化座標で出力するため、mm単位にスケール変換
     # SAM-6D の get_test_data は /1000 して mm→m を仮定している
     bbox = mesh_o3d.get_axis_aligned_bounding_box()
-    max_extent = max(bbox.get_extent())
-    if max_extent > 0:
-        target_mm = object_size_mm if object_size_mm > 0 else 200.0
-        scale = target_mm / max_extent
-        mesh_o3d.scale(scale, center=bbox.get_center())
+    extent = bbox.get_extent()  # [x, y, z]
+    if object_size_mm > 0:
+        # ユーザ指定: 高さ (Y軸) 基準でスケール
+        ref_extent = extent[1] if extent[1] > 0 else max(extent)
+        target_mm = object_size_mm
+        label = "高さ(Y)"
     else:
-        target_mm = object_size_mm if object_size_mm > 0 else 200.0
+        # 自動: 最長辺を200mmに正規化
+        ref_extent = max(extent)
+        target_mm = 200.0
+        label = "最長辺"
+    if ref_extent > 0:
+        scale = target_mm / ref_extent
+        mesh_o3d.scale(scale, center=bbox.get_center())
     # SAM-6D はモデル原点=物体中心を前提とするため原点に移動
     center = mesh_o3d.get_axis_aligned_bounding_box().get_center()
     mesh_o3d.translate(-center)
-    print(f"[Server] メッシュスケール変換: {max_extent:.4f} → {target_mm:.0f}mm (原点中心化済み)")
+    print(f"[Server] メッシュスケール変換 ({label}): {ref_extent:.4f} → {target_mm:.0f}mm (原点中心化済み)")
 
     mesh_path = ply_path.replace(".ply", "_mesh.ply")
     o3d.io.write_triangle_mesh(mesh_path, mesh_o3d)
