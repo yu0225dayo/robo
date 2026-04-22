@@ -392,8 +392,12 @@ def run_full(args, config):
             best_mask = cv2.resize(best_mask, (depth.shape[1], depth.shape[0]),
                                    interpolation=cv2.INTER_NEAREST)
 
+        # マスク縁の背景混入を防ぐため erosion で内側に縮小
+        erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        eroded_mask = cv2.erode(best_mask, erode_kernel, iterations=1)
+
         height_m, pts_3d = estimate_height_from_depth_mask(
-            depth, best_mask,
+            depth, eroded_mask,
             intrinsics.fx, intrinsics.fy, intrinsics.cx, intrinsics.cy,
             gravity_vec,
         )
