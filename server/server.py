@@ -411,9 +411,9 @@ async def reconstruct_mesh(
     extent = bbox.get_extent()  # [x, y, z]
     if object_size_mm > 0:
         # ユーザ指定: 高さ (Y軸) 基準でスケール
-        ref_extent = extent[1] if extent[1] > 0 else max(extent)
+        ref_extent = extent[2] if extent[2] > 0 else max(extent)
         target_mm = object_size_mm
-        label = "高さ(Y)"
+        label = "高さ(Z)"
     else:
         # 自動: 最長辺を200mmに正規化
         ref_extent = max(extent)
