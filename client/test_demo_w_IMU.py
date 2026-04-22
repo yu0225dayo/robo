@@ -332,21 +332,15 @@ def run_full(args, config):
     intrinsics = load_intrinsics(args, w, h)
 
     # ---- Step 0: 重力ベクトル取得 ----
-    if args.object_size > 0:
-        # 手動指定が優先
-        object_size_mm = args.object_size * 10.0
-        print(f"[高さ] 手動指定: {args.object_size} cm = {object_size_mm:.0f} mm (IMU 不使用)")
-        gravity_vec = None
-    elif args.gravity is not None:
-        # --gravity で手動指定
+    if args.gravity is not None:
+        # --gravity で手動指定（cam.json からの自動設定も含む）
         gravity_vec = np.array(args.gravity, dtype=np.float64)
         gravity_vec = gravity_vec / np.linalg.norm(gravity_vec)
-        print(f"[高さ] 重力ベクトル手動指定: {gravity_vec}")
-        object_size_mm = 0.0  # マスク取得後に計算
+        print(f"[高さ] 重力ベクトル: {gravity_vec}")
     else:
         # RealSense IMU から自動取得
         gravity_vec = get_gravity_imu(n_samples=args.imu_samples)
-        object_size_mm = 0.0  # マスク取得後に計算
+    object_size_mm = 0.0  # マスク取得後に計算
 
     # ---- Step 1: SAM-3D でメッシュ生成（マスクも取得） ----
     client = SAM6DClient(
@@ -540,10 +534,6 @@ def run_online(args, config):
         template_dir=args.template_dir or "",
     )
 
-    if args.object_size > 0:
-        client._object_size_mm = args.object_size * 10.0
-        print(f"[online] object_size_mm={client._object_size_mm:.0f} (手動指定)")
-
     print("\n[Step 1] SAM-6D で 6DoF pose 推定中...")
     R, t, img_pose, img_mesh = client.estimate_pose(
         rgb, depth, intrinsics,
@@ -645,9 +635,7 @@ def main():
     parser.add_argument("--click-y",    type=int, default=-1)
     parser.add_argument("--interactive", action="store_true", default=True)
 
-    # 高さ指定（優先順位: --object-size > --gravity > cam.json の gravity > IMU 自動）
-    parser.add_argument("--object-size", type=float, default=0.0,
-                        help="物体の高さ [cm]。指定するとIMU・深度推定を上書き。")
+    # 高さ指定（優先順位: --gravity > cam.json の gravity > IMU 自動）
     parser.add_argument("--gravity", type=float, nargs=3, default=None,
                         metavar=("GX", "GY", "GZ"),
                         help="重力方向ベクトル手動指定。cam.json の gravity より優先。")
