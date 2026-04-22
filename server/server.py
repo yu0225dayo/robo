@@ -668,15 +668,63 @@ async def pose_estimate(
     import base64
     import open3d as o3d
 
+    # vis_pem と同じ描画スタイルのヘルパー関数 (draw_utils.py 移植)
+    def _proj(pts_mm, R, t_mm, K):
+        """pts_mm: (3,N) mm座標 → (N,2) 画像座標"""
+        cam = R @ pts_mm + t_mm[:, np.newaxis]
+        p = K @ cam
+        return (p[:2] / p[2]).T.astype(np.int32)
+
+    def _draw_bbox(img, pts8x2, color, size=2):
+        """8頂点bboxを3段階の明度で描画 (vis_pem スタイル)"""
+        c_dark = tuple(int(c * 0.3) for c in color)
+        c_mid  = tuple(int(c * 0.6) for c in color)
+        for i, j in [(4,5),(5,7),(7,4),(4,6)]:  # ground
+            cv2.line(img, tuple(pts8x2[i]), tuple(pts8x2[j]), c_dark, size)
+        for i, j in [(0,4),(1,5),(2,6),(3,7)]:  # pillars
+            cv2.line(img, tuple(pts8x2[i]), tuple(pts8x2[j]), c_mid, size)
+        for i, j in [(0,1),(1,3),(3,2),(2,0)]:  # top
+            cv2.line(img, tuple(pts8x2[i]), tuple(pts8x2[j]), color, size)
+        return img
+
+    def _draw_axes(img, R, t_mm, K, length_mm):
+        """座標軸を赤(X)緑(Y)青(Z)の矢印で描画"""
+        origin = _proj(t_mm[:, np.newaxis], np.eye(3), np.zeros(3), K)[0]
+        for i, c in enumerate([(0,0,255),(0,255,0),(255,0,0)]):  # BGR: x=赤,y=緑,z=青
+            end_mm = t_mm + R[:, i] * length_mm
+            ep = _proj(end_mm[:, np.newaxis], np.eye(3), np.zeros(3), K)[0]
+            cv2.arrowedLine(img, tuple(origin), tuple(ep), c, 2, tipLength=0.3)
+        return img
+
+    def _make_vis(rgb_bgr, R, t_mm, pts_mm, K, color=(0,0,255), with_axes=True):
+        """vis_pem スタイル: 左=元画像 右=可視化 横並び (pts_mm: (N,3))"""
+        vis = rgb_bgr.copy()
+        # 点群投影 (1000点にダウンサンプル)
+        choose = np.random.choice(len(pts_mm), min(len(pts_mm), 1000), replace=False)
+        p2d = _proj(pts_mm[choose].T, R, t_mm, K)
+        in_b = (p2d[:,0]>=0)&(p2d[:,0]<w)&(p2d[:,1]>=0)&(p2d[:,1]<h)
+        for u, v in p2d[in_b]:
+            cv2.circle(vis, (int(u), int(v)), 1, color, -1)
+        # bbox
+        mins, maxs = pts_mm.min(0), pts_mm.max(0)
+        shift = (mins + maxs) / 2
+        scale = maxs - mins
+        corners = np.array([[-1,-1,-1],[ 1,-1,-1],[-1, 1,-1],[ 1, 1,-1],
+                             [-1,-1, 1],[ 1,-1, 1],[-1, 1, 1],[ 1, 1, 1]],
+                            dtype=np.float32) * (scale / 2) + shift
+        bbox2d = _proj(corners.T, R, t_mm, K)
+        _draw_bbox(vis, bbox2d, color)
+        # 座標軸
+        if with_axes:
+            _draw_axes(vis, R, t_mm, K, length_mm=np.max(scale) * 0.6)
+        # 左:元画像 右:可視化 横並び (vis_pem と同レイアウト)
+        concat = np.concatenate([rgb_bgr, vis], axis=1)
+        return concat
+
     R_np = np.array(R_list, dtype=np.float32)
-    t_np = np.array(t_m, dtype=np.float32)
+    t_mm_np = np.array(best["t"], dtype=np.float32)   # mm単位 (vis_pemと同じ)
+    K_np = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
 
-    class _Intr:
-        def __init__(self): self.fx, self.fy, self.cx, self.cy = fx, fy, cx, cy
-
-    intr = _Intr()
-
-    # 画像1: 点群 + bbox を RGB に投影 (姿勢推定に使ったスケール済みメッシュを使用)
     mesh_host = mesh_path_for_pem.replace(_docker_tmp, _host_tmp)
     img1_b64 = ""
     try:
@@ -685,37 +733,14 @@ async def pose_estimate(
             pcd = mesh_o3d.sample_points_uniformly(number_of_points=5000)
         else:
             pcd = o3d.io.read_point_cloud(mesh_host)
-        pts = np.asarray(pcd.points, dtype=np.float32)
-        # メッシュは mm 単位 → m に変換
-        pts_m = pts / 1000.0
-        pts_cam = (R_np @ pts_m.T).T + t_np
-        vis1 = bgr.copy()
-        valid = pts_cam[:, 2] > 0.01
-        us = (fx * pts_cam[valid, 0] / pts_cam[valid, 2] + cx).astype(np.int32)
-        vs = (fy * pts_cam[valid, 1] / pts_cam[valid, 2] + cy).astype(np.int32)
-        in_bounds = (us >= 0) & (us < w) & (vs >= 0) & (vs < h)
-        for u, v in zip(us[in_bounds], vs[in_bounds]):
-            cv2.circle(vis1, (int(u), int(v)), 2, (0, 255, 0), -1)
-        # bbox
-        mins, maxs = pts_m.min(0), pts_m.max(0)
-        corners = np.array([[mins[0],mins[1],mins[2]],[maxs[0],mins[1],mins[2]],
-                             [maxs[0],maxs[1],mins[2]],[mins[0],maxs[1],mins[2]],
-                             [mins[0],mins[1],maxs[2]],[maxs[0],mins[1],maxs[2]],
-                             [maxs[0],maxs[1],maxs[2]],[mins[0],maxs[1],maxs[2]]])
-        cc = (R_np @ corners.T).T + t_np
-        for i, j in [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]:
-            c1, c2 = cc[i], cc[j]
-            if c1[2] > 0.01 and c2[2] > 0.01:
-                u1=int(fx*c1[0]/c1[2]+cx); v1=int(fy*c1[1]/c1[2]+cy)
-                u2=int(fx*c2[0]/c2[2]+cx); v2=int(fy*c2[1]/c2[2]+cy)
-                cv2.line(vis1, (u1,v1), (u2,v2), (0,255,255), 2)
-        _, buf1 = cv2.imencode(".png", vis1)
+        pts_mm = np.asarray(pcd.points, dtype=np.float32)  # mm単位
+        concat1 = _make_vis(bgr, R_np, t_mm_np, pts_mm, K_np, with_axes=True)
+        _, buf1 = cv2.imencode(".png", concat1)
         img1_b64 = base64.b64encode(buf1).decode()
-        print("[pose_estimate] 画像1 (点群+bbox) 生成完了")
+        print("[pose_estimate] 画像1 (vis_pemスタイル) 生成完了")
     except Exception as e:
         print(f"[pose_estimate] 画像1 生成失敗: {e}")
 
-    # 画像2: メッシュを面サンプリングして高密度に投影
     img2_b64 = ""
     try:
         mesh_o3d2 = o3d.io.read_triangle_mesh(mesh_host)
@@ -723,18 +748,11 @@ async def pose_estimate(
             pcd2 = mesh_o3d2.sample_points_uniformly(number_of_points=20000)
         else:
             pcd2 = o3d.io.read_point_cloud(mesh_host)
-        pts2 = np.asarray(pcd2.points, dtype=np.float32) / 1000.0
-        pts2_cam = (R_np @ pts2.T).T + t_np
-        vis2 = bgr.copy()
-        valid2 = pts2_cam[:, 2] > 0.01
-        us2 = (fx * pts2_cam[valid2, 0] / pts2_cam[valid2, 2] + cx).astype(np.int32)
-        vs2 = (fy * pts2_cam[valid2, 1] / pts2_cam[valid2, 2] + cy).astype(np.int32)
-        in2 = (us2 >= 0) & (us2 < w) & (vs2 >= 0) & (vs2 < h)
-        for u, v in zip(us2[in2], vs2[in2]):
-            cv2.circle(vis2, (int(u), int(v)), 1, (0, 200, 0), -1)
-        _, buf2 = cv2.imencode(".png", vis2)
+        pts_mm2 = np.asarray(pcd2.points, dtype=np.float32)
+        concat2 = _make_vis(bgr, R_np, t_mm_np, pts_mm2, K_np, with_axes=False)
+        _, buf2 = cv2.imencode(".png", concat2)
         img2_b64 = base64.b64encode(buf2).decode()
-        print("[pose_estimate] 画像2 (メッシュ面) 生成完了")
+        print("[pose_estimate] 画像2 (高密度メッシュ) 生成完了")
     except Exception as e:
         print(f"[pose_estimate] 画像2 生成失敗: {e}")
 
