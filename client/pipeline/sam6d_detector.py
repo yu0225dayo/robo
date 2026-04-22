@@ -169,25 +169,11 @@ class SAM6DClient:
             import termios, sys
             termios.tcflush(sys.stdin, termios.TCIFLUSH)
 
-        # サイズ入力
-        object_size_mm = 0.0
-        while True:
-            try:
-                raw = input("[SAM6D] 物体の高さを入力してください (cm, スキップは Enter): ").strip()
-                if raw == "":
-                    print("[SAM6D] サイズ未入力: 深度から自動推定します")
-                    break
-                object_size_mm = float(raw) * 10.0  # cm → mm
-                print(f"[SAM6D] 指定高さ: {raw} cm = {object_size_mm:.0f} mm")
-                break
-            except ValueError:
-                print("  数値を入力してください (例: 15.5)")
-
         mesh_path, masks, scores = self.save_reference_mesh(
             rgb, mesh_save_path,
             click_x=cx, click_y=cy, seed=seed,
             mesh_method=mesh_method,
-            object_size_mm=object_size_mm,
+            object_size_mm=0.0,
         )
         return mesh_path, cx, cy, masks, scores
 

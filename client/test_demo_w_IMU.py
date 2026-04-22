@@ -277,7 +277,14 @@ def run_offline_mesh(args, config):
     mesh_path = args.mesh_out
     mesh_method = sam_cfg.get("mesh_method", "bpa")
 
-    client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
+    if args.click_x >= 0 and args.click_y >= 0:
+        client.save_reference_mesh(rgb, mesh_path,
+                                   click_x=args.click_x, click_y=args.click_y,
+                                   mesh_method=mesh_method)
+    elif args.interactive:
+        client.save_reference_mesh_interactive(rgb, mesh_path)
+    else:
+        client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
 
     print(f"\n[完了] mesh: {mesh_path}")
     print(f"       サーバ mesh: {client._server_mesh_path}")
@@ -344,13 +351,26 @@ def run_full(args, config):
 
     mesh_path = args.mesh_out
     mesh_method = sam_cfg.get("mesh_method", "bpa")
+    click_x, click_y = args.click_x, args.click_y
 
     print("\n[Step 1] SAM-3D でメッシュ生成中 (マスク取得)...")
-    _, masks, scores = client.save_reference_mesh(
-        rgb, mesh_path,
-        mesh_method=mesh_method,
-        object_size_mm=0.0,
-    )
+    if args.click_x >= 0 and args.click_y >= 0:
+        _, masks, scores = client.save_reference_mesh(
+            rgb, mesh_path,
+            click_x=click_x, click_y=click_y,
+            mesh_method=mesh_method,
+            object_size_mm=0.0,  # スケールはここでは設定しない
+        )
+    elif args.interactive:
+        _, click_x, click_y, masks, scores = client.save_reference_mesh_interactive(
+            rgb, mesh_path, mesh_method=mesh_method,
+        )
+    else:
+        _, masks, scores = client.save_reference_mesh(
+            rgb, mesh_path,
+            mesh_method=mesh_method,
+            object_size_mm=0.0,
+        )
 
     print(f"[Step 1完了] mesh: {mesh_path}")
 
@@ -409,7 +429,10 @@ def run_full(args, config):
     client._object_size_mm = object_size_mm
 
     print(f"\n[Step 3] SAM-6D で 6DoF pose 推定中 (object_size_mm={object_size_mm:.0f})...")
-    R, t, img_pose, img_mesh = client.estimate_pose(rgb, depth, intrinsics)
+    R, t, img_pose, img_mesh = client.estimate_pose(
+        rgb, depth, intrinsics,
+        click_x=click_x, click_y=click_y,
+    )
     print(f"[Step 3完了] t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
     print(f"  R=\n{R}")
 
@@ -512,7 +535,10 @@ def run_online(args, config):
     )
 
     print("\n[Step 1] SAM-6D で 6DoF pose 推定中...")
-    R, t, img_pose, img_mesh = client.estimate_pose(rgb, depth, intrinsics)
+    R, t, img_pose, img_mesh = client.estimate_pose(
+        rgb, depth, intrinsics,
+        click_x=args.click_x, click_y=args.click_y,
+    )
     print(f"  R=\n{R}")
     print(f"  t={t}")
 
@@ -603,6 +629,11 @@ def main():
                         help="[offline-mesh/full] 保存先")
     parser.add_argument("--server-mesh-path", default=None)
     parser.add_argument("--template-dir",     default=None)
+
+    # クリック・インタラクティブ
+    parser.add_argument("--click-x",    type=int, default=-1)
+    parser.add_argument("--click-y",    type=int, default=-1)
+    parser.add_argument("--interactive", action="store_true", default=True)
 
     # 高さ指定（優先順位: --gravity > cam.json の gravity > IMU 自動）
     parser.add_argument("--gravity", type=float, nargs=3, default=None,
