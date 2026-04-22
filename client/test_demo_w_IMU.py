@@ -398,9 +398,9 @@ def run_full(args, config):
         mask_ratio = mask_area / img_area * 100
         print(f"[Step 2] マスク面積: {mask_area}px / {img_area}px ({mask_ratio:.1f}%)")
         if mask_area > img_area * 0.02:  # 画像の2%以上なら大きいとみなす
-            erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+            erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
             eroded_mask = cv2.erode(best_mask, erode_kernel, iterations=1)
-            print(f"[Step 2] → erosion 適用 (5px)")
+            print(f"[Step 2] → erosion 適用 (3px)")
         else:
             eroded_mask = best_mask
             print(f"[Step 2] → 小さいため erosion スキップ")
