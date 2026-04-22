@@ -160,15 +160,18 @@ def run_full(args, config):
     mesh_path = args.mesh_out
     mesh_method = sam_cfg.get("mesh_method", "bpa")
     click_x, click_y = args.click_x, args.click_y
+    object_size_mm = args.object_size * 10.0 if args.object_size > 0 else 0.0
     print("\n[Step 1] SAM-3D でメッシュ生成中...")
     if args.click_x >= 0 and args.click_y >= 0:
         client.save_reference_mesh(rgb, mesh_path,
                                    click_x=click_x, click_y=click_y,
-                                   mesh_method=mesh_method)
+                                   mesh_method=mesh_method,
+                                   object_size_mm=object_size_mm)
     elif args.interactive:
-        _, click_x, click_y = client.save_reference_mesh_interactive(rgb, mesh_path, mesh_method=mesh_method)
+        _, click_x, click_y, _, _ = client.save_reference_mesh_interactive(rgb, mesh_path, mesh_method=mesh_method)
     else:
-        client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method)
+        client.save_reference_mesh(rgb, mesh_path, mesh_method=mesh_method,
+                                   object_size_mm=object_size_mm)
 
     print(f"[Step 1完了] mesh: {mesh_path}")
     print(f"             サーバ mesh: {client._server_mesh_path}")
@@ -404,6 +407,8 @@ def main():
     parser.add_argument("--click-x",    type=int, default=-1)
     parser.add_argument("--click-y",    type=int, default=-1)
     parser.add_argument("--interactive", action="store_true", default=True)
+    parser.add_argument("--object-size", type=float, default=0.0,
+                        help="物体の最長辺 [cm] (0=自動推定, 例: 15.5)")
 
     args = parser.parse_args()
     config = load_config(args.config)
