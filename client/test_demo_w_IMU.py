@@ -187,20 +187,80 @@ def estimate_height_from_depth_mask(
     mask: np.ndarray,
     fx: float, fy: float, cx: float, cy: float,
     gravity_vec: np.ndarray,
-) -> float:
+):
     """
-    深度画像 + マスク + 重力ベクトル → 物体高さ [m]
+    深度画像 + マスク + 重力ベクトル → 物体高さ [m] + 点群
 
     Returns:
         height_m: 高さ [m]。有効点が不足している場合は 0.0。
+        pts:      (N, 3) 3D 点群（可視化用）
     """
     pts = get_points_3d_from_mask(depth_m, mask, fx, fy, cx, cy)
     if len(pts) < 10:
         print(f"[高さ推定] 有効な深度点が不足 ({len(pts)} 点)。高さ推定をスキップ。")
-        return 0.0
+        return 0.0, pts
     h = calc_height_from_points(pts, gravity_vec)
     print(f"[高さ推定] 点数={len(pts)}  高さ={h:.4f} m ({h*100:.1f} cm)")
-    return h
+    return h, pts
+
+
+def draw_height_pcd(
+    rgb_bgr: np.ndarray,
+    pts: np.ndarray,
+    gravity_vec: np.ndarray,
+    fx: float, fy: float, cx: float, cy: float,
+    height_m: float,
+) -> np.ndarray:
+    """
+    高さで色付けした点群を RGB 画像に ★ マーカーで描画する。
+
+    低い点 → 青、高い点 → 赤
+    """
+    if len(pts) == 0:
+        return rgb_bgr.copy()
+
+    img = rgb_bgr.copy()
+    H, W = img.shape[:2]
+
+    # 重力方向に射影してスカラー高さを取得
+    proj = pts @ gravity_vec  # (N,)
+    p_min, p_max = proj.min(), proj.max()
+    span = p_max - p_min if p_max > p_min else 1.0
+    norm = (proj - p_min) / span  # 0=低, 1=高
+
+    # 2D 投影
+    Z = pts[:, 2]
+    valid = Z > 0
+    u = np.where(valid, (pts[:, 0] * fx / Z + cx).astype(np.int32), -1)
+    v = np.where(valid, (pts[:, 1] * fy / Z + cy).astype(np.int32), -1)
+
+    # 描画（間引き: 最大 2000 点）
+    idx = np.arange(len(pts))
+    if len(idx) > 2000:
+        idx = np.random.choice(idx, 2000, replace=False)
+
+    for i in idx:
+        if not valid[i]:
+            continue
+        ui, vi = int(u[i]), int(v[i])
+        if not (0 <= ui < W and 0 <= vi < H):
+            continue
+        t = float(norm[i])
+        # blue(255,0,0) → red(0,0,255) in BGR
+        b = int(255 * (1 - t))
+        r = int(255 * t)
+        color = (b, 0, r)
+        cv2.drawMarker(img, (ui, vi), color,
+                       markerType=cv2.MARKER_STAR,
+                       markerSize=8, thickness=1, line_type=cv2.LINE_AA)
+
+    # 高さテキスト
+    cv2.putText(img, f"Height: {height_m*100:.1f} cm",
+                (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, "HIGH", (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    cv2.putText(img, "LOW",  (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+    return img
 
 
 # ===========================================================================
@@ -340,7 +400,7 @@ def run_full(args, config):
             best_mask = cv2.resize(best_mask, (depth.shape[1], depth.shape[0]),
                                    interpolation=cv2.INTER_NEAREST)
 
-        height_m = estimate_height_from_depth_mask(
+        height_m, pts_3d = estimate_height_from_depth_mask(
             depth, best_mask,
             intrinsics.fx, intrinsics.fy, intrinsics.cx, intrinsics.cy,
             gravity_vec,
@@ -350,12 +410,15 @@ def run_full(args, config):
             object_size_mm = height_m * 1000.0
             print(f"[Step 2完了] 推定高さ: {height_m*100:.1f} cm = {object_size_mm:.0f} mm")
 
-            # マスクを保存（デバッグ用）
+            # 高さ色付き点群画像を保存
             os.makedirs("output/test", exist_ok=True)
-            mask_vis = cv2.applyColorMap(best_mask, cv2.COLORMAP_JET)
-            mask_overlay = cv2.addWeighted(rgb, 0.6, mask_vis, 0.4, 0)
-            cv2.imwrite("output/test/sam_mask.png", mask_overlay)
-            print("[Step 2] SAM マスク保存: output/test/sam_mask.png")
+            height_vis = draw_height_pcd(
+                rgb, pts_3d, gravity_vec,
+                intrinsics.fx, intrinsics.fy, intrinsics.cx, intrinsics.cy,
+                height_m,
+            )
+            cv2.imwrite("output/test/server_calc_height.png", height_vis)
+            print("[Step 2] 高さ推定点群画像保存: output/test/server_calc_height.png")
         else:
             print("[Step 2] 高さ推定失敗。object_size_mm=0 (サーバ深度推定に委譲)。")
             object_size_mm = 0.0
