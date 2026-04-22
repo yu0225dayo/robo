@@ -696,7 +696,7 @@ async def pose_estimate(
             cv2.arrowedLine(img, tuple(origin), tuple(ep), c, 2, tipLength=0.3)
         return img
 
-    def _make_vis(rgb_bgr, R, t_mm, pts_mm, K, color=(0,0,255), with_axes=True):
+    def _make_vis(rgb_bgr, R, t_mm, pts_mm, K, pcd_color=(0,0,255), bbox_color=(0,0,255), with_axes=True):
         """vis_pem スタイル: 左=元画像 右=可視化 横並び (pts_mm: (N,3))"""
         vis = rgb_bgr.copy()
         # 点群投影 (1000点にダウンサンプル)
@@ -704,7 +704,7 @@ async def pose_estimate(
         p2d = _proj(pts_mm[choose].T, R, t_mm, K)
         in_b = (p2d[:,0]>=0)&(p2d[:,0]<w)&(p2d[:,1]>=0)&(p2d[:,1]<h)
         for u, v in p2d[in_b]:
-            cv2.circle(vis, (int(u), int(v)), 1, color, -1)
+            cv2.circle(vis, (int(u), int(v)), 1, pcd_color, -1)
         # bbox
         mins, maxs = pts_mm.min(0), pts_mm.max(0)
         shift = (mins + maxs) / 2
@@ -713,7 +713,7 @@ async def pose_estimate(
                              [-1,-1, 1],[ 1,-1, 1],[-1, 1, 1],[ 1, 1, 1]],
                             dtype=np.float32) * (scale / 2) + shift
         bbox2d = _proj(corners.T, R, t_mm, K)
-        _draw_bbox(vis, bbox2d, color)
+        _draw_bbox(vis, bbox2d, bbox_color)
         # 座標軸
         if with_axes:
             _draw_axes(vis, R, t_mm, K, length_mm=np.max(scale) * 0.6)
@@ -734,7 +734,7 @@ async def pose_estimate(
         else:
             pcd = o3d.io.read_point_cloud(mesh_host)
         pts_mm = np.asarray(pcd.points, dtype=np.float32)  # mm単位
-        concat1 = _make_vis(bgr, R_np, t_mm_np, pts_mm, K_np, with_axes=True)
+        concat1 = _make_vis(bgr, R_np, t_mm_np, pts_mm, K_np, pcd_color=(0,255,0), bbox_color=(0,255,255), with_axes=True)
         _, buf1 = cv2.imencode(".png", concat1)
         img1_b64 = base64.b64encode(buf1).decode()
         print("[pose_estimate] 画像1 (vis_pemスタイル) 生成完了")
@@ -749,7 +749,7 @@ async def pose_estimate(
         else:
             pcd2 = o3d.io.read_point_cloud(mesh_host)
         pts_mm2 = np.asarray(pcd2.points, dtype=np.float32)
-        concat2 = _make_vis(bgr, R_np, t_mm_np, pts_mm2, K_np, with_axes=False)
+        concat2 = _make_vis(bgr, R_np, t_mm_np, pts_mm2, K_np, pcd_color=(0,255,0), bbox_color=(0,255,255), with_axes=False)
         _, buf2 = cv2.imencode(".png", concat2)
         img2_b64 = base64.b64encode(buf2).decode()
         print("[pose_estimate] 画像2 (高密度メッシュ) 生成完了")
