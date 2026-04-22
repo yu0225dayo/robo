@@ -663,6 +663,16 @@ async def pose_estimate(
     with open(result_json_path, "r") as f:
         detections = json.load(f)
 
+    # scaled ディレクトリに書かれた結果画像を元の sam6d_results_dir にもコピー
+    if result_output_host != output_dir_host:
+        import shutil as _shutil2
+        for _fname in ["vis_pem.png", "vis_ism.png", "detection_pem.json"]:
+            _src = os.path.join(result_output_host, "sam6d_results", _fname)
+            _dst = os.path.join(sam6d_results_dir, _fname)
+            if os.path.exists(_src):
+                _shutil2.copy2(_src, _dst)
+        print(f"[pose_estimate] 結果画像を {sam6d_results_dir} にコピー")
+
     if not detections:
         raise HTTPException(500, "pose 推定失敗: detection が空です")
 
