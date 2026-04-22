@@ -676,8 +676,8 @@ async def pose_estimate(
 
     intr = _Intr()
 
-    # 画像1: 点群 + bbox を RGB に投影
-    mesh_host = mesh_path  # host path
+    # 画像1: 点群 + bbox を RGB に投影 (姿勢推定に使ったスケール済みメッシュを使用)
+    mesh_host = mesh_path_for_pem.replace(_docker_tmp, _host_tmp)
     img1_b64 = ""
     try:
         mesh_o3d = o3d.io.read_triangle_mesh(mesh_host)
