@@ -129,52 +129,85 @@ class SAM6DClient:
         mesh_save_path: str,
         seed: int = 42,
         mesh_method: str = "bpa",
+        min_mask_ratio: float = 0.005,
     ) -> Tuple[str, int, int, list, list]:
-        """インタラクティブモード: クリックして物体を指定する"""
-        clicked = []
+        """インタラクティブモード: クリックして物体を指定する
 
-        def mouse_callback(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONDOWN:
-                clicked.clear()
-                clicked.append((x, y))
-
-        cv2.namedWindow("Select Object (click + Enter)")
-        cv2.setMouseCallback("Select Object (click + Enter)", mouse_callback)
-        print("[SAM6D] 物体をクリックして選択し、Enter で確定してください。")
+        Args:
+            min_mask_ratio: ベストマスクの面積がこの割合未満なら再選択を促す (デフォルト 0.5%)
+        """
+        img_area = rgb.shape[0] * rgb.shape[1]
+        win_name = "Select Object (click + Enter)"
 
         while True:
-            display = rgb.copy()
-            if clicked:
-                cv2.circle(display, clicked[0], 8, (0, 255, 0), -1)
-                cv2.putText(display, "Press Enter to confirm", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.imshow("Select Object (click + Enter)", display)
-            key = cv2.waitKey(1)
-            if key == 13 and clicked:
-                break
-            elif key == 27:
-                cv2.destroyAllWindows()
-                raise KeyboardInterrupt("キャンセルされました。")
+            clicked = []
 
-        cv2.destroyAllWindows()
-        cv2.waitKey(1)
-        cx, cy = clicked[0]
+            def mouse_callback(event, x, y, flags, param):
+                if event == cv2.EVENT_LBUTTONDOWN:
+                    clicked.clear()
+                    clicked.append((x, y))
 
-        # cv2 の Enter キーが stdin に残るのでフラッシュ
-        try:
-            import msvcrt
-            while msvcrt.kbhit():
-                msvcrt.getch()
-        except ImportError:
-            import termios, sys
-            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+            cv2.namedWindow(win_name)
+            cv2.setMouseCallback(win_name, mouse_callback)
+            print("[SAM6D] 物体をクリックして選択し、Enter で確定してください。")
 
-        mesh_path, masks, scores = self.save_reference_mesh(
-            rgb, mesh_save_path,
-            click_x=cx, click_y=cy, seed=seed,
-            mesh_method=mesh_method,
-            object_size_mm=0.0,
-        )
+            while True:
+                display = rgb.copy()
+                if clicked:
+                    cv2.circle(display, clicked[0], 8, (0, 255, 0), -1)
+                    cv2.putText(display, "Press Enter to confirm", (10, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.imshow(win_name, display)
+                key = cv2.waitKey(1)
+                if key == 13 and clicked:
+                    break
+                elif key == 27:
+                    cv2.destroyAllWindows()
+                    raise KeyboardInterrupt("キャンセルされました。")
+
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
+            cx, cy = clicked[0]
+
+            # cv2 の Enter キーが stdin に残るのでフラッシュ
+            try:
+                import msvcrt
+                while msvcrt.kbhit():
+                    msvcrt.getch()
+            except ImportError:
+                import termios, sys
+                termios.tcflush(sys.stdin, termios.TCIFLUSH)
+
+            mesh_path, masks, scores = self.save_reference_mesh(
+                rgb, mesh_save_path,
+                click_x=cx, click_y=cy, seed=seed,
+                mesh_method=mesh_method,
+                object_size_mm=0.0,
+            )
+
+            # マスクサイズチェック — 小さすぎる場合は再選択
+            if masks and scores:
+                best_idx = int(np.argmax(scores))
+                best_mask = masks[best_idx]
+                mask_area = int(np.count_nonzero(best_mask))
+                ratio = mask_area / img_area
+                print(f"[SAM6D] ベストマスク面積: {mask_area} px ({ratio*100:.2f}% of image)")
+                if ratio < min_mask_ratio:
+                    print(f"[SAM6D] マスクが小さすぎます ({ratio*100:.2f}% < {min_mask_ratio*100:.2f}%)。"
+                          "物体をもう一度クリックしてください。")
+                    # マスクを重ねて警告表示
+                    warn_disp = rgb.copy()
+                    cv2.putText(warn_disp,
+                                f"Mask too small ({ratio*100:.1f}%). Click again!",
+                                (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                    cv2.imshow(win_name, warn_disp)
+                    cv2.waitKey(1500)
+                    cv2.destroyAllWindows()
+                    cv2.waitKey(1)
+                    continue  # 再試行
+
+            break  # チェック通過
+
         return mesh_path, cx, cy, masks, scores
 
     def load_reference_mesh(
