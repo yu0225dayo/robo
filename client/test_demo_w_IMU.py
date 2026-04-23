@@ -409,8 +409,15 @@ def run_full(args, config):
             object_size_mm = height_m * 1000.0
             print(f"[Step 2完了] 推定高さ: {height_m*100:.1f} cm = {object_size_mm:.0f} mm")
 
-            # 高さ色付き点群画像を保存
             os.makedirs("output/test", exist_ok=True)
+
+            # SAM マスクをオーバーレイして保存
+            mask_vis = cv2.applyColorMap(best_mask, cv2.COLORMAP_JET)
+            mask_overlay = cv2.addWeighted(rgb, 0.6, mask_vis, 0.4, 0)
+            cv2.imwrite("output/test/sam_mask.png", mask_overlay)
+            print("[Step 2] SAM マスク保存: output/test/sam_mask.png")
+
+            # 高さ色付き点群画像を保存
             height_vis = draw_height_pcd(
                 rgb, pts_3d, gravity_vec,
                 intrinsics.fx, intrinsics.fy, intrinsics.cx, intrinsics.cy,
