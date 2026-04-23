@@ -129,12 +129,12 @@ class SAM6DClient:
         mesh_save_path: str,
         seed: int = 42,
         mesh_method: str = "bpa",
-        min_mask_ratio: float = 0.005,
+        min_mask_ratio: float = 0.1,
     ) -> Tuple[str, int, int, list, list]:
         """インタラクティブモード: クリックして物体を指定する
 
         Args:
-            min_mask_ratio: ベストマスクの面積がこの割合未満なら再選択を促す (デフォルト 0.5%)
+            min_mask_ratio: ベストマスクの面積がこの割合未満なら再選択を促す (デフォルト 10%)
         """
         img_area = rgb.shape[0] * rgb.shape[1]
         win_name = "Select Object (click + Enter)"
