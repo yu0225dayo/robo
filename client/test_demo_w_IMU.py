@@ -298,6 +298,23 @@ def run_offline_mesh(args, config):
     print(f"    --template-dir \"{client._template_dir}\"")
 
 
+def _align_y_up(
+    mesh_pts: np.ndarray,
+    R: np.ndarray,
+    gravity_vec: np.ndarray,
+):
+    """PEM の R[:, 1]（オブジェクトY軸）と上方向のdotが負なら X 軸周り 180° 回転で反転する。"""
+    up = -gravity_vec / np.linalg.norm(gravity_vec)
+    y_in_cam = R[:, 1].astype(np.float64)
+    if float(np.dot(y_in_cam, up)) >= 0:
+        print(f"[Y-up補正] Y軸は上向き (dot={np.dot(y_in_cam, up):.3f})、補正不要")
+        return mesh_pts, np.eye(3)
+    # X軸周り 180° 回転: Y → -Y, Z → -Z
+    R_corr = np.diag([1.0, -1.0, -1.0])
+    print(f"[Y-up補正] Y軸が下向き (dot={np.dot(y_in_cam, up):.3f})、反転適用")
+    return (R_corr @ mesh_pts.T).T.astype(mesh_pts.dtype), R_corr
+
+
 def run_full(args, config):
     """
     RGB + 深度ファイル → SAM マスク取得 → IMU/重力で高さ自動推定
@@ -305,11 +322,8 @@ def run_full(args, config):
     """
     from pipeline.sam6d_detector import SAM6DClient
     from pipeline.grasp_generator import GraspGenerator
-    from utils.coord_transform import (
-        CameraIntrinsics, ObjectPose,
-        estimate_scale_from_depth, normalized_to_camera,
-    )
-    from utils.visualization import project_hands_on_image
+    from utils.coord_transform import CameraIntrinsics, ObjectPose
+    from utils.visualization import project_hands_on_image, save_grasp_figure
     from utils.pointcloud_utils import load_pointcloud_ply
 
     sam_cfg   = config["sam3d"]

@@ -301,35 +301,16 @@ def _align_y_up(
     R: np.ndarray,
     gravity_vec: np.ndarray,
 ):
-    """
-    PEM が出力した R の Y 列（カメラ座標でのオブジェクト Y 軸）が
-    -gravity（上方向）を向くよう、メッシュ点群を回転補正する。
-
-    Returns:
-        mesh_pts_aligned: 補正後の点群 (N,3)
-        R_corr:           適用した補正回転行列 (3,3)
-    """
+    """PEM の R[:, 1]（オブジェクトY軸）と上方向のdotが負なら X 軸周り 180° 回転で反転する。"""
     up = -gravity_vec / np.linalg.norm(gravity_vec)
-    y_target = R.T.astype(np.float64) @ up          # オブジェクト座標での目標 Y 軸
-    y_target /= np.linalg.norm(y_target)
-    y_axis = np.array([0.0, 1.0, 0.0])
-
-    c = float(np.dot(y_axis, y_target))
-    if abs(c - 1.0) < 1e-6:
+    y_in_cam = R[:, 1].astype(np.float64)
+    if float(np.dot(y_in_cam, up)) >= 0:
+        print(f"[Y-up補正] Y軸は上向き (dot={np.dot(y_in_cam, up):.3f})、補正不要")
         return mesh_pts, np.eye(3)
-    elif abs(c + 1.0) < 1e-6:
-        ax = np.array([1.0, 0.0, 0.0]) if abs(y_axis[0]) < 0.9 else np.array([0.0, 0.0, 1.0])
-        ax = np.cross(y_axis, ax); ax /= np.linalg.norm(ax)
-        R_corr = 2 * np.outer(ax, ax) - np.eye(3)
-    else:
-        v = np.cross(y_axis, y_target)
-        s = np.linalg.norm(v)
-        kmat = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-        R_corr = np.eye(3) + kmat + kmat @ kmat * ((1 - c) / (s * s))
-
-    mesh_pts_aligned = (R_corr @ mesh_pts.T).T.astype(mesh_pts.dtype)
-    print(f"[Y-up補正] R_corr 適用: Y軸目標={y_target.round(3)}")
-    return mesh_pts_aligned, R_corr
+    # X軸周り 180° 回転: Y → -Y, Z → -Z
+    R_corr = np.diag([1.0, -1.0, -1.0])
+    print(f"[Y-up補正] Y軸が下向き (dot={np.dot(y_in_cam, up):.3f})、反転適用")
+    return (R_corr @ mesh_pts.T).T.astype(mesh_pts.dtype), R_corr
 
 
 def run_full(args, config):
