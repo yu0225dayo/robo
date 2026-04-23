@@ -296,20 +296,10 @@ def run_offline_mesh(args, config):
     print(f"    --template-dir \"{client._template_dir}\"")
 
 
-def _align_y_up(
-    mesh_pts: np.ndarray,
-    R: np.ndarray,
-    gravity_vec: np.ndarray,
-):
-    """PEM の R[:, 1]（オブジェクトY軸）と上方向のdotが負なら X 軸周り 180° 回転で反転する。"""
-    up = -gravity_vec / np.linalg.norm(gravity_vec)
-    y_in_cam = R[:, 1].astype(np.float64)
-    if float(np.dot(y_in_cam, up)) >= 0:
-        print(f"[Y-up補正] Y軸は上向き (dot={np.dot(y_in_cam, up):.3f})、補正不要")
-        return mesh_pts, np.eye(3)
-    # X軸周り 180° 回転: Y → -Y, Z → -Z
+def _align_y_up(mesh_pts: np.ndarray):
+    """PEM は Y 軸下向きで出力するため、X 軸周り 180° 回転（Y→-Y, Z→-Z）で常に補正する。"""
     R_corr = np.diag([1.0, -1.0, -1.0])
-    print(f"[Y-up補正] Y軸が下向き (dot={np.dot(y_in_cam, up):.3f})、反転適用")
+    print("[Y-up補正] Y軸反転適用")
     return (R_corr @ mesh_pts.T).T.astype(mesh_pts.dtype), R_corr
 
 
@@ -482,10 +472,8 @@ def run_full(args, config):
     # ---- Step 4: Shape2Gesture ----
     mesh_pts = load_pointcloud_ply(mesh_path, target_points=2048)
 
-    # Y 軸を上方向（-gravity）に揃える
-    if gravity_vec is not None:
-        mesh_pts, R_corr = _align_y_up(mesh_pts, R.astype(np.float64), gravity_vec)
-        R = (R.astype(np.float64) @ R_corr.T).astype(np.float32)
+    mesh_pts, R_corr = _align_y_up(mesh_pts)
+    R = (R.astype(np.float64) @ R_corr.T).astype(np.float32)
 
     # main.py と同様にメッシュ幾何からスケールを計算（深度推定より安定）
     _centered = mesh_pts - mesh_pts.mean(axis=0)
@@ -597,9 +585,8 @@ def run_online(args, config):
     if args.gravity is not None:
         gravity_vec = np.array(args.gravity, dtype=np.float64)
         gravity_vec /= np.linalg.norm(gravity_vec)
-    if gravity_vec is not None:
-        mesh_pts, R_corr = _align_y_up(mesh_pts, R.astype(np.float64), gravity_vec)
-        R = (R.astype(np.float64) @ R_corr.T).astype(np.float32)
+    mesh_pts, R_corr = _align_y_up(mesh_pts)
+    R = (R.astype(np.float64) @ R_corr.T).astype(np.float32)
 
     # main.py と同様にメッシュ幾何からスケールを計算
     _centered = mesh_pts - mesh_pts.mean(axis=0)
