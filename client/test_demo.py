@@ -195,6 +195,22 @@ def run_full(args, config):
     print(f"[Step 2完了] t=[{t[0]:.3f}, {t[1]:.3f}, {t[2]:.3f}] m")
     print(f"  R=\n{R}")
 
+    # ---- 軸方向を表示 (カメラ座標系: Y軸は下向き正) ----
+    # R の各列 = 物体ローカル軸がカメラ座標系でどちらを向いているか
+    # カメラ座標系では Y+ が下向きなので、物体Y軸の cam_Y 成分が負なら「上向き」
+    _ax_labels = ["X(赤)", "Y(緑)", "Z(青)"]
+    print("\n[軸方向] 物体の各軸が画像のどちらを向いているか (X=赤/Y=緑/Z=青)")
+    print(f"  {'軸':<8} {'cam_X':>7} {'cam_Y':>7} {'cam_Z':>7}  画像上下")
+    for i, label in enumerate(_ax_labels):
+        ax = R[:, i]
+        # 画像座標系: Y+=下, Y-=上 なので cam_Y が負なら画像↑方向
+        if abs(ax[1]) > 0.5:
+            updown = "画像↑ 上向き" if ax[1] < 0 else "画像↓ 下向き"
+        else:
+            updown = "(左右 or 奥行き方向)"
+        print(f"  {label:<8} {ax[0]:>+7.3f} {ax[1]:>+7.3f} {ax[2]:>+7.3f}  {updown}")
+    print(f"  ※cam_Y が負 → 画像の上方向")
+
     os.makedirs("output/test", exist_ok=True)
     if img_pose is not None:
         cv2.imwrite("output/test/server_pointcloud.png", img_pose)
