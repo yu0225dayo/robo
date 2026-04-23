@@ -487,10 +487,15 @@ def run_full(args, config):
 
     # ---- Step 4: Shape2Gesture ----
     mesh_pts = load_pointcloud_ply(mesh_path, target_points=2048)
-    mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
-    mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
-    scale = estimate_scale_from_depth(depth, mask_u, mask_v, intrinsics, mesh_pts)
-    pose = ObjectPose(center_3d=t, scale=scale, R=R)
+
+    if gravity_vec is not None:
+        mesh_pts, R_corr = _align_y_up(mesh_pts, R.astype(np.float64), gravity_vec)
+        R = (R.astype(np.float64) @ R_corr.T).astype(np.float32)
+
+    _centered = mesh_pts - mesh_pts.mean(axis=0)
+    mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
+    print(f"[CoordTransform] mesh_scale_m={mesh_scale_m:.4f} m")
+    pose = ObjectPose(center_3d=t, scale=mesh_scale_m, R=R)
 
     print("\n[Step 4] Shape2Gesture で把持姿勢を生成中...")
     generator = GraspGenerator(
@@ -499,20 +504,28 @@ def run_full(args, config):
     )
     generator.load_models()
     grasp_results = generator.generate(mesh_pts, num_samples=model_cfg["num_samples"])
+    norm_pts, seg_labels = generator.get_segmentation(mesh_pts)
 
-    print(f"\n[Step 5] {len(grasp_results)} 件の把持姿勢を画像に投影中...")
+    print(f"\n[Step 5] {len(grasp_results)} 件の把持姿勢を保存中...")
     for i, (lh_norm, rh_norm) in enumerate(grasp_results):
+        sd = f"output/test/sample_{i:02d}"
+        os.makedirs(sd, exist_ok=True)
+        save_grasp_figure(
+            norm_pts, lh_norm, rh_norm,
+            labels=seg_labels,
+            save_path=os.path.join(sd, "grasp_3d.png"),
+            title=f"Sample {i}",
+        )
         result_img = project_hands_on_image(
             rgb, lh_norm, rh_norm,
             object_pose=pose,
             intrinsics=intrinsics,
         )
-        save_path = f"output/test/grasp_{i:02d}.png"
-        cv2.imwrite(save_path, result_img)
-        print(f"  保存: {save_path}")
+        cv2.imwrite(os.path.join(sd, "rgb_w_grasp.png"), result_img)
+        print(f"  保存: {sd}/")
 
     if not args.no_show:
-        cv2.imshow("Grasp Result", cv2.imread("output/test/grasp_00.png"))
+        cv2.imshow("Grasp Result", cv2.imread("output/test/sample_00/rgb_w_grasp.png"))
         print("\n何かキーを押すと終了...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -522,11 +535,8 @@ def run_online(args, config):
     """RGB + 深度ファイル → SAM-6D pose → Shape2Gesture → 画像投影"""
     from pipeline.sam6d_detector import SAM6DClient
     from pipeline.grasp_generator import GraspGenerator
-    from utils.coord_transform import (
-        CameraIntrinsics, ObjectPose,
-        estimate_scale_from_depth, normalized_to_camera,
-    )
-    from utils.visualization import project_hands_on_image, project_pointcloud_on_image, render_mesh_on_image
+    from utils.coord_transform import CameraIntrinsics, ObjectPose
+    from utils.visualization import project_hands_on_image, project_pointcloud_on_image, render_mesh_on_image, save_grasp_figure
     from utils.pointcloud_utils import load_pointcloud_ply
 
     sam_cfg   = config["sam3d"]
@@ -587,10 +597,18 @@ def run_online(args, config):
         print("\n[完了] --skip-grasp が指定されたため把持姿勢生成をスキップします。")
         return
 
-    mask_u = int(intrinsics.fx * t[0] / max(t[2], 0.01) + intrinsics.cx)
-    mask_v = int(intrinsics.fy * t[1] / max(t[2], 0.01) + intrinsics.cy)
-    scale = estimate_scale_from_depth(depth, mask_u, mask_v, intrinsics, mesh_pts)
-    pose = ObjectPose(center_3d=t, scale=scale, R=R)
+    gravity_vec = None
+    if args.gravity is not None:
+        gravity_vec = np.array(args.gravity, dtype=np.float64)
+        gravity_vec /= np.linalg.norm(gravity_vec)
+    if gravity_vec is not None:
+        mesh_pts, R_corr = _align_y_up(mesh_pts, R.astype(np.float64), gravity_vec)
+        R = (R.astype(np.float64) @ R_corr.T).astype(np.float32)
+
+    _centered = mesh_pts - mesh_pts.mean(axis=0)
+    mesh_scale_m = float(np.max(np.linalg.norm(_centered, axis=1))) / 1000.0
+    print(f"[CoordTransform] mesh_scale_m={mesh_scale_m:.4f} m")
+    pose = ObjectPose(center_3d=t, scale=mesh_scale_m, R=R)
 
     print("\n[Step 2] Shape2Gesture で把持姿勢を生成中...")
     generator = GraspGenerator(
@@ -599,18 +617,28 @@ def run_online(args, config):
     )
     generator.load_models()
     grasp_results = generator.generate(mesh_pts, num_samples=model_cfg["num_samples"])
+    norm_pts, seg_labels = generator.get_segmentation(mesh_pts)
 
-    print(f"\n[Step 3] {len(grasp_results)} 件の把持姿勢を画像に投影中...")
+    print(f"\n[Step 3] {len(grasp_results)} 件の把持姿勢を保存中...")
     for i, (lh_norm, rh_norm) in enumerate(grasp_results):
+        sd = f"output/test/sample_{i:02d}"
+        os.makedirs(sd, exist_ok=True)
+        save_grasp_figure(
+            norm_pts, lh_norm, rh_norm,
+            labels=seg_labels,
+            save_path=os.path.join(sd, "grasp_3d.png"),
+            title=f"Sample {i}",
+        )
         result_img = project_hands_on_image(
             rgb, lh_norm, rh_norm,
             object_pose=pose,
             intrinsics=intrinsics,
         )
-        cv2.imwrite(f"output/test/grasp_{i:02d}.png", result_img)
+        cv2.imwrite(os.path.join(sd, "rgb_w_grasp.png"), result_img)
+        print(f"  保存: {sd}/")
 
     if not args.no_show:
-        cv2.imshow("Grasp Result", cv2.imread("output/test/grasp_00.png"))
+        cv2.imshow("Grasp Result", cv2.imread("output/test/sample_00/rgb_w_grasp.png"))
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
