@@ -720,6 +720,9 @@ async def pose_estimate(
     R_np = np.array(R_list, dtype=np.float32)
     t_mm_np = np.array(best["t"], dtype=np.float32)   # mm単位 (vis_pemと同じ)
     K_np = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
+    # PEM は Y 軸下向きで出力するため、可視化用に X 軸周り 180° 補正
+    _R_corr = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
+    R_vis = R_np @ _R_corr
 
     mesh_host = mesh_path_for_pem.replace(_docker_tmp, _host_tmp)
     img1_b64 = ""
@@ -730,7 +733,8 @@ async def pose_estimate(
         else:
             pcd = o3d.io.read_point_cloud(mesh_host)
         pts_mm = np.asarray(pcd.points, dtype=np.float32)  # mm単位
-        concat1 = _make_vis(bgr, R_np, t_mm_np, pts_mm, K_np, pcd_color=(0,255,0), bbox_color=(0,255,255), with_axes=True)
+        pts_mm_vis = (pts_mm @ _R_corr.T)
+        concat1 = _make_vis(bgr, R_vis, t_mm_np, pts_mm_vis, K_np, pcd_color=(0,255,0), bbox_color=(0,255,255), with_axes=True)
         _, buf1 = cv2.imencode(".png", concat1)
         img1_b64 = base64.b64encode(buf1).decode()
         print("[pose_estimate] 画像1 (vis_pemスタイル) 生成完了")
@@ -745,7 +749,8 @@ async def pose_estimate(
         else:
             pcd2 = o3d.io.read_point_cloud(mesh_host)
         pts_mm2 = np.asarray(pcd2.points, dtype=np.float32)
-        concat2 = _make_vis(bgr, R_np, t_mm_np, pts_mm2, K_np, pcd_color=(0,255,0), bbox_color=(0,255,255), with_axes=False)
+        pts_mm2_vis = (pts_mm2 @ _R_corr.T)
+        concat2 = _make_vis(bgr, R_vis, t_mm_np, pts_mm2_vis, K_np, pcd_color=(0,255,0), bbox_color=(0,255,255), with_axes=False)
         _, buf2 = cv2.imencode(".png", concat2)
         img2_b64 = base64.b64encode(buf2).decode()
         print("[pose_estimate] 画像2 (高密度メッシュ) 生成完了")
