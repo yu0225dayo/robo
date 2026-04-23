@@ -152,6 +152,10 @@ class SAM6DClient:
             print("[SAM6D] 物体をクリックして選択し、Enter で確定してください。")
 
             while True:
+                # ウィンドウが閉じられたら終了
+                if cv2.getWindowProperty(win_name, cv2.WND_PROP_VISIBLE) < 1:
+                    cv2.destroyAllWindows()
+                    raise KeyboardInterrupt("ウィンドウが閉じられました。")
                 display = rgb.copy()
                 if clicked:
                     cv2.circle(display, clicked[0], 8, (0, 255, 0), -1)
